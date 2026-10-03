@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 # the current repository layout. Existing process environment values win.
 app_directory = Path(__file__).resolve().parents[1]
 backend_directory = Path(__file__).resolve().parents[2]
-project_directory = Path(__file__).resolve().parents[4]
+project_directory = Path(__file__).resolve().parents[3]
 load_dotenv(app_directory / ".env")
 load_dotenv(backend_directory / ".env")
 load_dotenv(project_directory / ".env")
