@@ -6,6 +6,7 @@ from sqlalchemy import pool
 from alembic import context
 
 from app.config.database import Base, DATABASE_URL
+from app.models.aceptacion_credito import AceptacionCredito
 from app.models.amortizacion import CuotaAmortizacion
 from app.models.audit_log import AuditLog
 from app.models.cliente import Cliente

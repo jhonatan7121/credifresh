@@ -15,6 +15,7 @@ BACKEND_DIRECTORY = Path(__file__).resolve().parents[1]
 EXPECTED_TABLES = {
     "alembic_version",
     "audit_logs",
+    "aceptaciones_credito",
     "clientes",
     "creditos",
     "cuotas_amortizacion",

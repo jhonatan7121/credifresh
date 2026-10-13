@@ -1,13 +1,17 @@
 import datetime
+import os
+import re
 from decimal import Decimal
 from typing import List, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
 from app.models.cliente import Cliente
+from app.models.aceptacion_credito import AceptacionCredito
 from app.models.credito import Credito
 from app.models.evaluacion import Evaluacion
 from modules.creditos.motor_decision import evaluar_credito
@@ -25,6 +29,32 @@ router = APIRouter(
     prefix="/creditos",
     tags=["Créditos"]
 )
+
+COLOMBIA_TZ = datetime.timezone(datetime.timedelta(hours=-5))
+BANK_OPERATIONS_ENABLED = os.getenv("BANK_OPERATIONS_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def require_bank_operations_enabled(
+    db: Session,
+    current_user: Usuario,
+    accion: str,
+    credito_id: int,
+):
+    if not BANK_OPERATIONS_ENABLED:
+        registrar_auditoria(
+            db=db,
+            usuario=current_user,
+            accion=accion,
+            entidad="credito",
+            entidad_id=credito_id,
+            resultado="BLOQUEADO",
+            detalles={"motivo": "OPERACIONES_BANCARIAS_DESHABILITADAS"},
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="El desembolso y el registro de pagos están deshabilitados hasta configurar y habilitar las operaciones bancarias.",
+        )
 
 
 def validar_transicion_estado(estado_actual: str, nuevo_estado: str):
@@ -96,8 +126,52 @@ class CreditoSchema(BaseModel):
     tasa_interes: float = Field(ge=0)
 
 
+class SolicitudClienteSchema(BaseModel):
+    monto: float = Field(gt=0)
+    plazo_meses: int = Field(gt=0, le=12)
+
+
+class TasaCreditoSchema(BaseModel):
+    tasa_interes: Decimal = Field(gt=0, le=100)
+
+
+class RechazoManualSchema(BaseModel):
+    motivo: str = Field(min_length=5, max_length=500)
+
+    @field_validator("motivo")
+    @classmethod
+    def limpiar_motivo(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 5:
+            raise ValueError("El motivo debe tener al menos 5 caracteres")
+        return value
+
+
 class EstadoCreditoSchema(BaseModel):
     estado: Literal["SOLICITADO", "APROBADO", "RECHAZADO", "DESEMBOLSADO", "PAGADO"]
+
+
+class AceptarCondicionesSchema(BaseModel):
+    acepta: Literal[True]
+    monto: Decimal = Field(gt=0)
+    plazo_meses: int = Field(gt=0)
+    tasa_interes: Decimal = Field(ge=0)
+    cuota_mensual: Decimal = Field(gt=0)
+    total_estimado: Decimal = Field(gt=0)
+
+
+class PendienteDesembolsoResponse(BaseModel):
+    credito_id: int
+    cliente_id: int
+    cliente_nombre: str
+    aceptado_por: str | None
+    fecha_aceptacion: datetime.datetime
+    monto: Decimal
+    plazo_meses: int
+    tasa_interes: Decimal
+    cuota_mensual: Decimal
+    total_estimado: Decimal
+    condiciones_version: str
 
 
 class PagoHistoricoResponse(BaseModel):
@@ -139,6 +213,182 @@ def listar_creditos(
     return consulta.all()
 
 
+@router.get("/estado-operaciones")
+def obtener_estado_operaciones(
+    current_user: Usuario = Depends(RoleChecker(["ADMIN"])),
+):
+    """Informa si el bloqueo de desembolsos y pagos está activo en esta API."""
+    return {"operaciones_bancarias_habilitadas": BANK_OPERATIONS_ENABLED}
+
+
+@router.get("/pendientes-desembolso", response_model=List[PendienteDesembolsoResponse])
+def listar_pendientes_desembolso(
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(RoleChecker(["ADMIN"])),
+):
+    """Lista créditos aprobados y aceptados que aún no se han desembolsado."""
+    filas = (
+        db.query(AceptacionCredito, Credito, Cliente, Usuario)
+        .join(Credito, Credito.id == AceptacionCredito.credito_id)
+        .join(Cliente, Cliente.id == Credito.cliente_id)
+        .outerjoin(Usuario, Usuario.id == AceptacionCredito.usuario_id)
+        .filter(Credito.estado == "APROBADO")
+        .order_by(AceptacionCredito.fecha_aceptacion.asc(), Credito.id.asc())
+        .all()
+    )
+    return [
+        {
+            "credito_id": aceptacion.credito_id,
+            "cliente_id": cliente.id,
+            "cliente_nombre": cliente.nombre,
+            "aceptado_por": usuario.email if usuario else None,
+            "fecha_aceptacion": aceptacion.fecha_aceptacion,
+            "monto": aceptacion.monto,
+            "plazo_meses": aceptacion.plazo_meses,
+            "tasa_interes": aceptacion.tasa_interes,
+            "cuota_mensual": aceptacion.cuota_mensual,
+            "total_estimado": aceptacion.total_estimado,
+            "condiciones_version": aceptacion.condiciones_version,
+        }
+        for aceptacion, _, cliente, usuario in filas
+    ]
+
+
+@router.get("/mis")
+def listar_mis_creditos(
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(RoleChecker(["CLIENTE"]))
+):
+    cliente = db.query(Cliente).filter(Cliente.usuario_id == current_user.id).first()
+    if not cliente:
+        raise HTTPException(status_code=403, detail="Tu cuenta aún no está vinculada a un perfil de cliente")
+    creditos = (
+        db.query(Credito)
+        .filter(Credito.cliente_id == cliente.id)
+        .order_by(Credito.id.desc())
+        .all()
+    )
+    respuesta = []
+    for credito in creditos:
+        evaluacion = (
+            db.query(Evaluacion)
+            .filter(Evaluacion.credito_id == credito.id)
+            .order_by(Evaluacion.fecha_evaluacion.desc(), Evaluacion.id.desc())
+            .first()
+        )
+        aceptacion = db.query(AceptacionCredito).filter(AceptacionCredito.credito_id == credito.id).first()
+        total_estimado = None
+        cuotas = []
+        pagos = []
+        if credito.estado == "APROBADO" and evaluacion and evaluacion.decision == "APROBADO":
+            fecha_referencia = datetime.datetime.now(COLOMBIA_TZ)
+            plan_estimado = generar_plan_amortizacion(credito, evaluacion, fecha_referencia)
+            total_estimado = sum((Decimal(str(cuota.monto_cuota)) for cuota in plan_estimado), Decimal("0.00"))
+        elif credito.estado in ["DESEMBOLSADO", "PAGADO"]:
+            cuotas = (
+                db.query(CuotaAmortizacion)
+                .filter(CuotaAmortizacion.credito_id == credito.id)
+                .order_by(CuotaAmortizacion.numero_cuota.asc())
+                .all()
+            )
+            pagos = (
+                db.query(PagoModel)
+                .filter(PagoModel.credito_id == credito.id)
+                .order_by(PagoModel.fecha_pago.desc())
+                .all()
+            )
+
+        respuesta.append({
+            "credito": credito,
+            "evaluacion": evaluacion,
+            "total_estimado": total_estimado,
+            "aceptacion": aceptacion,
+            "cuotas": cuotas,
+            "pagos": pagos,
+        })
+    return respuesta
+
+
+@router.post("/mis", status_code=201)
+def solicitar_mi_credito(
+    solicitud: SolicitudClienteSchema,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(RoleChecker(["CLIENTE"])),
+):
+    cliente = db.query(Cliente).filter(Cliente.usuario_id == current_user.id).first()
+    if not cliente:
+        raise HTTPException(status_code=403, detail="Tu cuenta aún no está vinculada a un perfil de cliente")
+    if (
+        not cliente.telefono
+        or not re.fullmatch(r"\+?\d{7,20}", cliente.telefono.strip())
+        or not cliente.direccion
+        or len(cliente.direccion.strip()) < 5
+    ):
+        raise HTTPException(status_code=409, detail="Completa y guarda tu teléfono y dirección en tu perfil antes de solicitar un crédito")
+    perfil = db.query(PerfilFinanciero).filter(PerfilFinanciero.cliente_id == cliente.id).first()
+    if not perfil:
+        raise HTTPException(status_code=409, detail="Completa tu perfil financiero antes de solicitar un crédito")
+    if solicitud.monto < 500000 or solicitud.monto > 1500000:
+        raise HTTPException(status_code=400, detail="El monto solicitado debe estar entre $500.000 y $1.500.000 COP")
+
+    credito = Credito(
+        cliente_id=cliente.id,
+        monto=solicitud.monto,
+        plazo_meses=solicitud.plazo_meses,
+        tasa_interes=Decimal("0.00"),
+    )
+    db.add(credito)
+    db.flush()
+    registrar_auditoria(
+        db=db,
+        usuario=current_user,
+        accion="CREAR_CREDITO",
+        entidad="credito",
+        entidad_id=credito.id,
+        detalles={"canal": "APP_CLIENTE", "campos_registrados": ["cliente_id", "monto", "plazo_meses"], "contacto_cliente_asociado": True, "tasa_pendiente_admin": True},
+    )
+    crear_notificacion(
+        db=db,
+        usuario_id=current_user.id,
+        titulo="Solicitud de crédito recibida",
+        mensaje=f"Tu solicitud por ${float(credito.monto):,.0f} COP fue recibida. CrediFresh asignará la tasa antes de evaluarla.",
+        credito_id=credito.id,
+    )
+    db.commit()
+    db.refresh(credito)
+    return {"mensaje": "Solicitud recibida; pendiente de tasa y evaluación administrativa", "credito": credito}
+
+
+@router.patch("/{credito_id}/tasa")
+def asignar_tasa_credito(
+    credito_id: int,
+    datos: TasaCreditoSchema,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(RoleChecker(["GESTOR", "ADMIN"])),
+):
+    credito = db.query(Credito).filter(Credito.id == credito_id).with_for_update().first()
+    if not credito:
+        raise HTTPException(status_code=404, detail="Crédito no encontrado")
+    if credito.estado != "SOLICITADO":
+        raise HTTPException(status_code=409, detail="Solo se puede asignar la tasa antes de evaluar la solicitud")
+    if db.query(Evaluacion.id).filter(Evaluacion.credito_id == credito.id).first():
+        raise HTTPException(status_code=409, detail="La solicitud ya tiene una evaluación")
+
+    tasa_anterior = Decimal(str(credito.tasa_interes))
+    credito.tasa_interes = datos.tasa_interes
+    registrar_auditoria(
+        db=db,
+        usuario=current_user,
+        accion="ASIGNAR_TASA_CREDITO",
+        entidad="credito",
+        entidad_id=credito.id,
+        detalles={"tasa_anterior": str(tasa_anterior), "tasa_nueva": str(datos.tasa_interes)},
+    )
+    db.commit()
+    db.refresh(credito)
+    return {"mensaje": "Tasa mensual asignada correctamente", "credito": credito}
+
+
 @router.get("/{credito_id}")
 def obtener_credito(
     credito_id: int,
@@ -163,6 +413,242 @@ def obtener_credito(
             )
 
     return credito
+
+
+@router.get("/{credito_id}/evaluacion")
+def obtener_evaluacion_credito(
+    credito_id: int,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user)
+):
+    credito = db.query(Credito).filter(Credito.id == credito_id).first()
+    if not credito:
+        raise HTTPException(status_code=404, detail="Crédito no encontrado")
+
+    if current_user.rol == "CLIENTE":
+        cliente_asociado = db.query(Cliente).filter(Cliente.usuario_id == current_user.id).first()
+        if not cliente_asociado or credito.cliente_id != cliente_asociado.id:
+            raise HTTPException(status_code=403, detail="No tiene permisos para ver esta evaluación")
+
+    evaluacion = (
+        db.query(Evaluacion)
+        .filter(Evaluacion.credito_id == credito.id)
+        .order_by(Evaluacion.fecha_evaluacion.desc(), Evaluacion.id.desc())
+        .first()
+    )
+    if not evaluacion:
+        raise HTTPException(status_code=404, detail="El crédito aún no tiene una evaluación")
+
+    return evaluacion
+
+
+@router.get("/{credito_id}/aceptacion")
+def obtener_aceptacion_credito(
+    credito_id: int,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user)
+):
+    credito = db.query(Credito).filter(Credito.id == credito_id).first()
+    if not credito:
+        raise HTTPException(status_code=404, detail="Crédito no encontrado")
+
+    if current_user.rol == "CLIENTE":
+        cliente = db.query(Cliente).filter(Cliente.usuario_id == current_user.id).first()
+        if not cliente or credito.cliente_id != cliente.id:
+            raise HTTPException(status_code=403, detail="No tiene permisos para consultar esta aceptación")
+    elif current_user.rol not in ["ADMIN", "GESTOR"]:
+        raise HTTPException(status_code=403, detail="No tiene permisos para consultar esta aceptación")
+
+    aceptacion = db.query(AceptacionCredito).filter(AceptacionCredito.credito_id == credito.id).first()
+    if not aceptacion:
+        raise HTTPException(status_code=404, detail="El cliente aún no ha aceptado las condiciones")
+
+    usuario = db.query(Usuario).filter(Usuario.id == aceptacion.usuario_id).first()
+    return {
+        "credito_id": aceptacion.credito_id,
+        "cliente_id": aceptacion.cliente_id,
+        "aceptado_por": usuario.email if usuario else None,
+        "fecha_aceptacion": aceptacion.fecha_aceptacion,
+        "monto": aceptacion.monto,
+        "plazo_meses": aceptacion.plazo_meses,
+        "tasa_interes": aceptacion.tasa_interes,
+        "cuota_mensual": aceptacion.cuota_mensual,
+        "total_estimado": aceptacion.total_estimado,
+        "condiciones_version": aceptacion.condiciones_version,
+    }
+
+
+@router.post("/{credito_id}/aceptar", status_code=201)
+def aceptar_condiciones_credito(
+    credito_id: int,
+    confirmacion: AceptarCondicionesSchema,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(RoleChecker(["CLIENTE"]))
+):
+    credito = (
+        db.query(Credito)
+        .filter(Credito.id == credito_id)
+        .with_for_update()
+        .first()
+    )
+    if not credito:
+        raise HTTPException(status_code=404, detail="Crédito no encontrado")
+
+    cliente = db.query(Cliente).filter(Cliente.usuario_id == current_user.id).first()
+    if not cliente or credito.cliente_id != cliente.id:
+        raise HTTPException(status_code=403, detail="No tiene permisos para aceptar este crédito")
+    if credito.estado != "APROBADO":
+        raise HTTPException(status_code=400, detail="Solo se pueden aceptar condiciones de un crédito aprobado")
+
+    existente = db.query(AceptacionCredito).filter(AceptacionCredito.credito_id == credito.id).first()
+    if existente:
+        raise HTTPException(status_code=409, detail="Las condiciones de este crédito ya fueron aceptadas")
+
+    evaluacion = (
+        db.query(Evaluacion)
+        .filter(Evaluacion.credito_id == credito.id)
+        .order_by(Evaluacion.fecha_evaluacion.desc(), Evaluacion.id.desc())
+        .first()
+    )
+    if not evaluacion or evaluacion.decision != "APROBADO":
+        raise HTTPException(status_code=409, detail="No se encontró una evaluación aprobatoria vigente")
+
+    fecha_base = datetime.datetime.now(COLOMBIA_TZ)
+    cuotas = generar_plan_amortizacion(credito, evaluacion, fecha_base)
+    total_estimado = sum((Decimal(str(cuota.monto_cuota)) for cuota in cuotas), Decimal("0.00"))
+    condiciones_actuales = (
+        Decimal(str(credito.monto)),
+        credito.plazo_meses,
+        Decimal(str(credito.tasa_interes)),
+        Decimal(str(evaluacion.cuota_mensual)),
+        total_estimado,
+    )
+    condiciones_mostradas = (
+        confirmacion.monto,
+        confirmacion.plazo_meses,
+        confirmacion.tasa_interes,
+        confirmacion.cuota_mensual,
+        confirmacion.total_estimado,
+    )
+    if condiciones_mostradas != condiciones_actuales:
+        raise HTTPException(
+            status_code=409,
+            detail="Las condiciones cambiaron desde que se mostraron. Recarga la pantalla antes de aceptar.",
+        )
+
+    aceptacion = AceptacionCredito(
+        credito_id=credito.id,
+        cliente_id=cliente.id,
+        usuario_id=current_user.id,
+        monto=credito.monto,
+        plazo_meses=credito.plazo_meses,
+        tasa_interes=credito.tasa_interes,
+        cuota_mensual=evaluacion.cuota_mensual,
+        total_estimado=total_estimado,
+        condiciones_version="1.0",
+    )
+    db.add(aceptacion)
+    registrar_auditoria(
+        db=db,
+        usuario=current_user,
+        accion="ACEPTAR_CONDICIONES_CREDITO",
+        entidad="credito",
+        entidad_id=credito.id,
+        detalles={
+            "monto": str(credito.monto),
+            "plazo_meses": credito.plazo_meses,
+            "tasa_mensual": str(credito.tasa_interes),
+            "cuota_mensual": str(evaluacion.cuota_mensual),
+            "total_estimado": str(total_estimado),
+            "condiciones_version": "1.0",
+        },
+    )
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Las condiciones de este crédito ya fueron aceptadas")
+
+    db.refresh(aceptacion)
+    return {
+        "credito_id": aceptacion.credito_id,
+        "fecha_aceptacion": aceptacion.fecha_aceptacion,
+        "monto": aceptacion.monto,
+        "plazo_meses": aceptacion.plazo_meses,
+        "tasa_interes": aceptacion.tasa_interes,
+        "cuota_mensual": aceptacion.cuota_mensual,
+        "total_estimado": aceptacion.total_estimado,
+        "condiciones_version": aceptacion.condiciones_version,
+        "mensaje": "Aceptación registrada. El crédito aún no ha sido desembolsado.",
+    }
+
+
+@router.get("/{credito_id}/simulacion-amortizacion")
+def simular_amortizacion_credito(
+    credito_id: int,
+    fecha_inicio: datetime.date | None = Query(default=None, description="Fecha tentativa de desembolso para la simulación"),
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user)
+):
+    credito = db.query(Credito).filter(Credito.id == credito_id).first()
+    if not credito:
+        raise HTTPException(status_code=404, detail="Crédito no encontrado")
+
+    if current_user.rol == "CLIENTE":
+        cliente_asociado = db.query(Cliente).filter(Cliente.usuario_id == current_user.id).first()
+        if not cliente_asociado or credito.cliente_id != cliente_asociado.id:
+            raise HTTPException(status_code=403, detail="No tiene permisos para simular este crédito")
+
+    if credito.estado != "APROBADO":
+        raise HTTPException(
+            status_code=400,
+            detail="La simulación está disponible únicamente para créditos aprobados y aún no desembolsados"
+        )
+
+    evaluacion = (
+        db.query(Evaluacion)
+        .filter(Evaluacion.credito_id == credito.id)
+        .order_by(Evaluacion.fecha_evaluacion.desc(), Evaluacion.id.desc())
+        .first()
+    )
+    if not evaluacion or evaluacion.decision != "APROBADO":
+        raise HTTPException(status_code=404, detail="No se encontró una evaluación aprobatoria para este crédito")
+
+    fecha_actual_colombia = datetime.datetime.now(COLOMBIA_TZ).date()
+    fecha_simulacion = fecha_inicio or fecha_actual_colombia
+    if fecha_simulacion < fecha_actual_colombia:
+        raise HTTPException(status_code=400, detail="La fecha tentativa no puede estar en el pasado")
+
+    fecha_referencia = datetime.datetime.combine(
+        fecha_simulacion,
+        datetime.time(hour=12),
+        tzinfo=COLOMBIA_TZ,
+    )
+    cuotas = generar_plan_amortizacion(
+        credito=credito,
+        evaluacion=evaluacion,
+        fecha_desembolso=fecha_referencia
+    )
+    total_estimado = sum((Decimal(str(cuota.monto_cuota)) for cuota in cuotas), Decimal("0.00"))
+
+    return {
+        "credito_id": credito.id,
+        "fecha_referencia_simulacion": fecha_referencia,
+        "nota": f"Simulación con fecha tentativa {fecha_simulacion:%d/%m/%Y}. Las fechas pueden variar según el desembolso real. No crea cuotas ni desembolsa el crédito.",
+        "cuota_mensual_estimada": evaluacion.cuota_mensual,
+        "total_estimado": total_estimado,
+        "cuotas": [
+            {
+                "numero_cuota": cuota.numero_cuota,
+                "fecha_vencimiento": cuota.fecha_vencimiento,
+                "monto_cuota": cuota.monto_cuota,
+                "capital": cuota.capital,
+                "interes": cuota.interes,
+                "saldo_remanente": cuota.saldo_remanente,
+            }
+            for cuota in cuotas
+        ],
+    }
 
 
 @router.post("/", status_code=201)
@@ -209,6 +695,14 @@ def crear_credito(
 
     db.add(credito)
     db.flush()
+    registrar_auditoria(
+        db=db,
+        usuario=current_user,
+        accion="CREAR_CREDITO",
+        entidad="credito",
+        entidad_id=credito.id,
+        detalles={"campos_registrados": ["cliente_id", "monto", "plazo_meses", "tasa_interes"]},
+    )
 
     if cliente.usuario_id:
         crear_notificacion(
@@ -296,6 +790,7 @@ def evaluar_credito_endpoint(
     credito = (
         db.query(Credito)
         .filter(Credito.id == credito_id)
+        .with_for_update()
         .first()
     )
 
@@ -305,11 +800,17 @@ def evaluar_credito_endpoint(
             detail="Crédito no encontrado"
         )
 
-    # Validación preventiva de máquina de estados: evitar re-evaluar créditos ya finalizados
-    if credito.estado in ["APROBADO", "RECHAZADO"]:
+    # Bloqueo de máquina de estados: solo se pueden evaluar solicitudes pendientes.
+    if credito.estado != "SOLICITADO":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"El crédito ya ha sido evaluado y se encuentra en estado terminal {credito.estado}."
+            detail=f"Solo se pueden evaluar créditos en estado SOLICITADO. Estado actual: {credito.estado}."
+        )
+
+    if Decimal(str(credito.tasa_interes)) <= Decimal("0"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Asigna una tasa mensual desde el portal antes de evaluar esta solicitud.",
         )
 
     perfil = (
@@ -400,12 +901,91 @@ def evaluar_credito_endpoint(
     }
 
 
+@router.post("/{credito_id}/rechazar")
+def rechazar_credito_manualmente(
+    credito_id: int,
+    rechazo: RechazoManualSchema,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(RoleChecker(["GESTOR", "ADMIN"])),
+):
+    """Permite al equipo rechazar una solicitud pendiente dejando motivo y trazabilidad."""
+    credito = (
+        db.query(Credito)
+        .filter(Credito.id == credito_id)
+        .with_for_update()
+        .first()
+    )
+    if not credito:
+        raise HTTPException(status_code=404, detail="Crédito no encontrado")
+    if credito.estado != "SOLICITADO":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Solo se pueden rechazar solicitudes en estado SOLICITADO. Estado actual: {credito.estado}.",
+        )
+
+    perfil = (
+        db.query(PerfilFinanciero)
+        .filter(PerfilFinanciero.cliente_id == credito.cliente_id)
+        .first()
+    )
+    capacidad_mensual = None
+    if perfil:
+        capacidad_mensual = (
+            Decimal(str(perfil.ingresos_mensuales))
+            - Decimal(str(perfil.gastos_mensuales))
+            - Decimal(str(perfil.otras_obligaciones))
+        )
+
+    credito.estado = "RECHAZADO"
+    credito.fecha_evaluacion = datetime.datetime.now(datetime.timezone.utc)
+    evaluacion = Evaluacion(
+        credito_id=credito.id,
+        decision="RECHAZADO",
+        tipo="MANUAL",
+        cuota_mensual=None,
+        capacidad_mensual=capacidad_mensual,
+        motivos=rechazo.motivo,
+    )
+    db.add(evaluacion)
+
+    registrar_auditoria(
+        db=db,
+        usuario=current_user,
+        accion="RECHAZAR_CREDITO_MANUAL",
+        entidad="credito",
+        entidad_id=credito.id,
+        resultado="EXITOSO",
+        detalles={"motivo": rechazo.motivo},
+    )
+
+    cliente = db.query(Cliente).filter(Cliente.id == credito.cliente_id).first()
+    if cliente and cliente.usuario_id:
+        crear_notificacion(
+            db=db,
+            usuario_id=cliente.usuario_id,
+            titulo="Solicitud de crédito rechazada",
+            mensaje=f"Tu solicitud de crédito por ${float(credito.monto):,.0f} COP fue rechazada. Revisa el motivo en los detalles de tu solicitud.",
+            credito_id=credito.id,
+        )
+
+    db.commit()
+    db.refresh(credito)
+    db.refresh(evaluacion)
+    return {
+        "mensaje": "Solicitud rechazada manualmente. El motivo quedó registrado.",
+        "decision": "RECHAZADO",
+        "motivo": rechazo.motivo,
+        "credito": credito,
+    }
+
+
 @router.post("/{credito_id}/desembolsar")
 def desembolsar_credito_endpoint(
     credito_id: int,
     db: Session = Depends(get_db),
     current_user: Usuario = Depends(RoleChecker(["GESTOR", "ADMIN"]))
 ):
+    require_bank_operations_enabled(db, current_user, "DESEMBOLSAR_CREDITO", credito_id)
     # Bloqueo pesimista con with_for_update() para evitar condiciones de carrera concurrentes
     credito = (
         db.query(Credito)
@@ -430,6 +1010,17 @@ def desembolsar_credito_endpoint(
             detail=f"No se permite desembolsar un crédito en estado {credito.estado}. Debe estar en estado APROBADO."
         )
 
+    aceptacion = (
+        db.query(AceptacionCredito)
+        .filter(AceptacionCredito.credito_id == credito.id)
+        .first()
+    )
+    if not aceptacion or aceptacion.cliente_id != credito.cliente_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="El cliente debe aceptar las condiciones desde su sesión antes del desembolso.",
+        )
+
     # Comprobar preventivamente que no existan ya cuotas registradas para este crédito
     cuotas_existentes = (
         db.query(CuotaAmortizacion)
@@ -446,13 +1037,14 @@ def desembolsar_credito_endpoint(
     evaluacion = (
         db.query(Evaluacion)
         .filter(Evaluacion.credito_id == credito.id)
+        .order_by(Evaluacion.fecha_evaluacion.desc(), Evaluacion.id.desc())
         .first()
     )
 
-    if not evaluacion:
+    if not evaluacion or evaluacion.decision != "APROBADO":
         raise HTTPException(
-            status_code=404,
-            detail="No se encontró la evaluación correspondiente para este crédito."
+            status_code=409,
+            detail="No se encontró una evaluación aprobatoria vigente para este crédito."
         )
 
     # Generar el plan de amortización
@@ -464,6 +1056,37 @@ def desembolsar_credito_endpoint(
             evaluacion=evaluacion,
             fecha_desembolso=fecha_desembolso
         )
+
+        total_estimado_actual = sum(
+            (Decimal(str(cuota.monto_cuota)) for cuota in cuotas),
+            Decimal("0.00"),
+        )
+        valores_actuales = {
+            "monto": Decimal(str(credito.monto)),
+            "plazo_meses": credito.plazo_meses,
+            "tasa_interes": Decimal(str(credito.tasa_interes)),
+            "cuota_mensual": Decimal(str(evaluacion.cuota_mensual)),
+            "total_estimado": total_estimado_actual,
+        }
+        campos_inconsistentes = [
+            campo for campo, valor_actual in valores_actuales.items()
+            if getattr(aceptacion, campo) != valor_actual
+        ]
+        if campos_inconsistentes:
+            registrar_auditoria(
+                db=db,
+                usuario=current_user,
+                accion="DESEMBOLSO_BLOQUEADO_CONDICIONES_DESACTUALIZADAS",
+                entidad="credito",
+                entidad_id=credito.id,
+                resultado="BLOQUEADO",
+                detalles={"campos_inconsistentes": campos_inconsistentes},
+            )
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Las condiciones vigentes ya no coinciden con las aceptadas por el cliente. El desembolso queda bloqueado hasta regularizar la solicitud.",
+            )
 
         # Operación atómica: actualización de estado y guardado de cuotas en la misma transacción
         credito.estado = "DESEMBOLSADO"
@@ -495,6 +1118,9 @@ def desembolsar_credito_endpoint(
 
         db.commit()
         db.refresh(credito)
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception:
         db.rollback()
         raise HTTPException(
@@ -517,6 +1143,7 @@ def registrar_pago_endpoint(
     db: Session = Depends(get_db),
     current_user: Usuario = Depends(RoleChecker(["GESTOR", "ADMIN"]))
 ):
+    require_bank_operations_enabled(db, current_user, "REGISTRAR_PAGO", credito_id)
     # 1. Bloqueo pesimista del crédito para evitar condiciones de carrera en el estado principal
     credito = (
         db.query(Credito)

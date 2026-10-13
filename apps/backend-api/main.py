@@ -1,6 +1,6 @@
 import os
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -11,11 +11,13 @@ from app.api.v1.endpoints.auth import router as auth_router
 from app.api.v1.endpoints.reportes import router as reportes_router
 from app.api.v1.endpoints.auditoria import router as auditoria_router
 from app.api.v1.endpoints.notificaciones import router as notificaciones_router
+from app.api.v1.endpoints.usuarios import router as usuarios_router
 
 from app.api.v1.endpoints.simulador import router as simulador_router
 
 
 from app.config.database import engine
+from modules.audit.audit_context import reset_audit_request_ip, set_audit_request_ip
 
 app = FastAPI(
     title="CrediFresh API",
@@ -42,6 +44,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def attach_audit_request_ip(request: Request, call_next):
+    # Registra solo el peer TCP que ve la API; no se confía en X-Forwarded-For
+    # porque puede ser enviado directamente por el cliente.
+    ip = request.client.host if request.client else None
+    context_token = set_audit_request_ip(ip)
+    try:
+        return await call_next(request)
+    finally:
+        reset_audit_request_ip(context_token)
+
 app.include_router(clientes_router)
 app.include_router(creditos_router)
 app.include_router(perfil_financiero_router)
@@ -52,6 +66,7 @@ app.include_router(simulador_router)
 app.include_router(notificaciones_router)
 
 app.include_router(auditoria_router)
+app.include_router(usuarios_router)
 
 @app.get("/")
 def home():

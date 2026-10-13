@@ -51,6 +51,27 @@ def listar_notificaciones(
     return query.order_by(Notificacion.fecha_creacion.desc()).all()
 
 
+@router.patch("/leer-todas", response_model=List[NotificacionResponse])
+def marcar_todas_leidas(
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(RoleChecker(["CLIENTE"])),
+):
+    """Marca como leídos los avisos del cliente autenticado, sin afectar otros usuarios."""
+    notificaciones = (
+        db.query(Notificacion)
+        .filter(
+            Notificacion.usuario_id == current_user.id,
+            Notificacion.leida.is_(False),
+        )
+        .order_by(Notificacion.fecha_creacion.desc())
+        .all()
+    )
+    for notificacion in notificaciones:
+        notificacion.leida = True
+    db.commit()
+    return notificaciones
+
+
 @router.patch("/{notificacion_id}/leer", response_model=NotificacionResponse)
 def marcar_notificacion_leida(
     notificacion_id: int,

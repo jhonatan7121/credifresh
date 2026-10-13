@@ -30,6 +30,59 @@ python -m alembic stamp head
 No se deben ejecutar downgrades de la migración inicial: están bloqueados
 porque eliminarían tablas y datos.
 
+## Crear el primer administrador
+
+El registro público solo crea usuarios `CLIENTE`. Para preparar una cuenta de
+operación en una base que aún no tenga un administrador activo, desde
+`apps/backend-api` ejecuta:
+
+```powershell
+python scripts/crear_admin.py
+```
+
+El comando solicita el correo y la contraseña de forma interactiva; la
+contraseña no se muestra en pantalla. Exige al menos 12 caracteres y una
+confirmación. Se niega a cambiar correos existentes o a crear otro
+administrador cuando ya existe uno activo. No escribe credenciales ni hashes
+en archivos. Guarda previamente un respaldo de la base y no ejecutes el
+comando desde una terminal compartida.
+
+Si se olvida esa contraseña, desde `apps/backend-api` se puede restablecer
+únicamente la contraseña de una cuenta `ADMIN` activa existente:
+
+```powershell
+python scripts/restablecer_admin.py
+```
+
+El comando solicita el correo y la nueva contraseña de forma interactiva,
+oculta la contraseña, exige confirmarla y no modifica el rol ni el estado de
+la cuenta.
+
+## Operaciones bancarias
+
+`BANK_OPERATIONS_ENABLED` permanece en `false` mientras no esté configurado el
+proceso bancario. En ese estado, los endpoints de desembolso y registro de
+pagos responden `503` y no cambian créditos, cuotas ni pagos. Esta variable no
+conecta con un banco, no inicia transferencias ni confirma la recepción de
+fondos: solo permite que la API registre esas operaciones internamente. No la
+habilites hasta integrar y verificar el proceso de transferencia y conciliación.
+Los tests usan una base SQLite aislada y activan la variable para ejercitar esos
+flujos simulados. Cada intento administrativo bloqueado queda en
+la auditoría con resultado `BLOQUEADO` y motivo, sin registrar el monto enviado.
+Los inicios de sesión exitosos, fallidos y bloqueados, el registro público de
+clientes, la creación de créditos y las operaciones de mantenimiento de clientes,
+cuentas, usuarios y perfiles financieros también quedan auditados. La bitácora
+guarda los nombres de los campos modificados, no cédulas, teléfonos, correos ni
+cifras del perfil financiero; las contraseñas nunca se incluyen. Los eventos
+financieros de aceptación, desembolso y pago conservan los importes necesarios
+para su trazabilidad. Los eventos guardan la dirección del peer TCP observada
+por la API; detrás de un proxy puede ser la dirección del proxy. La API no
+confía en `X-Forwarded-For` sin una configuración explícita de proxies de
+confianza.
+Antes de desembolsar, la API vuelve a comparar monto, plazo, tasa, cuota y total
+del plan con la aceptación registrada; cualquier diferencia bloquea la
+operación y queda auditada.
+
 ## Docker
 
 La migración es una operación de lanzamiento explícita, no una acción
@@ -37,7 +90,7 @@ automática al iniciar cada contenedor. Antes de desplegar una nueva versión,
 ejecuta una sola vez:
 
 ```powershell
-docker run --rm --env-file .env credifresh-api python -m alembic upgrade head
+docker compose run --rm --no-deps backend-api alembic upgrade head
 ```
 
 Después inicia la API normalmente. Esto evita carreras entre varias réplicas

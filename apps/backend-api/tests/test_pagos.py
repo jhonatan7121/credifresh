@@ -4,6 +4,7 @@ from decimal import Decimal
 from app.models.amortizacion import CuotaAmortizacion
 from app.models.pago import Pago as PagoModel
 from app.models.credito import Credito
+from app.models.cliente import Cliente
 from conftest import TestSessionLocal
 
 # Helper para evitar colisiones de cédula en ejecuciones sucesivas
@@ -17,6 +18,57 @@ def generar_datos_cliente_test():
         "cedula": str(_ced_counter),
         "telefono": "3129876543"
     }
+
+
+def aceptar_condiciones_como_cliente(client, cliente_id, credito_id, user_email=None):
+    if user_email is None:
+        user_email = f"cliente_pagos_{credito_id}@credifresh.com"
+        reg_resp = client.post("/auth/register", json={
+            "email": user_email,
+            "password": "password123"
+        })
+        assert reg_resp.status_code == 201
+        user_id = reg_resp.json()["id"]
+
+        db = TestSessionLocal()
+        try:
+            cliente = db.query(Cliente).filter(Cliente.id == cliente_id).first()
+            cliente.usuario_id = user_id
+            db.commit()
+        finally:
+            db.close()
+
+    login_resp = client.post("/auth/login", json={
+        "email": user_email,
+        "password": "password123"
+    })
+    assert login_resp.status_code == 200
+    cliente_headers = {"Authorization": f"Bearer {login_resp.json()['access_token']}"}
+
+    from main import app
+    from app.core.deps import get_current_user, get_current_active_user
+    old_current_user = app.dependency_overrides.pop(get_current_user, None)
+    old_active_user = app.dependency_overrides.pop(get_current_active_user, None)
+    try:
+        creditos_resp = client.get("/creditos/mis", headers=cliente_headers)
+        assert creditos_resp.status_code == 200, creditos_resp.text
+        credito_data = next(item for item in creditos_resp.json() if item["credito"]["id"] == credito_id)
+        evaluacion = credito_data["evaluacion"]
+
+        aceptar_resp = client.post(f"/creditos/{credito_id}/aceptar", json={
+            "acepta": True,
+            "monto": credito_data["credito"]["monto"],
+            "plazo_meses": credito_data["credito"]["plazo_meses"],
+            "tasa_interes": credito_data["credito"]["tasa_interes"],
+            "cuota_mensual": evaluacion["cuota_mensual"],
+            "total_estimado": credito_data["total_estimado"]
+        }, headers=cliente_headers)
+        assert aceptar_resp.status_code == 201, aceptar_resp.text
+    finally:
+        if old_current_user:
+            app.dependency_overrides[get_current_user] = old_current_user
+        if old_active_user:
+            app.dependency_overrides[get_current_active_user] = old_active_user
 
 
 def preparar_credito_desembolsado(client: TestClient) -> int:
@@ -50,7 +102,10 @@ def preparar_credito_desembolsado(client: TestClient) -> int:
     eval_resp = client.post(f"/creditos/{credito_id}/evaluar")
     assert eval_resp.status_code == 200
 
-    # 5. Desembolsar
+    # 5. El cliente acepta las condiciones desde su propia sesión.
+    aceptar_condiciones_como_cliente(client, cliente_id, credito_id)
+
+    # 6. Desembolsar como ADMIN
     desem_resp = client.post(f"/creditos/{credito_id}/desembolsar")
     assert desem_resp.status_code == 200
 
@@ -366,6 +421,7 @@ def test_consulta_amortizacion_propio_cliente(client: TestClient):
     })
     credito_id = cred_resp.json()["credito"]["id"]
     client.post(f"/creditos/{credito_id}/evaluar")
+    aceptar_condiciones_como_cliente(client, cliente_id, credito_id, user_email)
     client.post(f"/creditos/{credito_id}/desembolsar")
 
     # Iniciar sesión con el usuario recién registrado
@@ -439,6 +495,7 @@ def test_consulta_pagos_propio_cliente(client: TestClient):
     })
     credito_id = cred_resp.json()["credito"]["id"]
     client.post(f"/creditos/{credito_id}/evaluar")
+    aceptar_condiciones_como_cliente(client, cliente_id, credito_id, user_email)
     client.post(f"/creditos/{credito_id}/desembolsar")
     client.post(f"/creditos/{credito_id}/pagos", json={"monto": "50000.00", "metodo_pago": "TRANSFERENCIA"})
 

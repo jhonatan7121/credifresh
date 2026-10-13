@@ -1,5 +1,5 @@
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
@@ -7,13 +7,13 @@ from app.config.database import get_db
 from app.core.security import SECRET_KEY, ALGORITHM
 from app.models.usuario import Usuario
 
-# Esquema OAuth2 con el endpoint de login de la aplicación
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+# Login recibe JSON; HTTPBearer documenta correctamente el JWT que devuelve.
+bearer_scheme = HTTPBearer()
 
 
 def get_current_user(
     db: Session = Depends(get_db),
-    token: str = Depends(oauth2_scheme)
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)
 ) -> Usuario:
     """Dependencia para obtener el usuario autenticado actual a través de su token JWT."""
     credentials_exception = HTTPException(
@@ -22,15 +22,18 @@ def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
-        if email is None:
+        # Legacy session tokens omit purpose; preserve them while rejecting reset links as bearer tokens.
+        if email is None or payload.get("purpose", "access") != "access":
             raise credentials_exception
     except JWTError:
         raise credentials_exception
         
     usuario = db.query(Usuario).filter(Usuario.email == email).first()
     if usuario is None:
+        raise credentials_exception
+    if payload.get("tv", 1) != usuario.auth_token_version:
         raise credentials_exception
         
     return usuario

@@ -373,7 +373,7 @@ def test_bloqueo_segunda_evaluacion(client: TestClient):
     # Segunda evaluación (debe dar 400 Bad Request y error exacto)
     eval_resp2 = client.post(f"/creditos/{credito_id}/evaluar")
     assert eval_resp2.status_code == 400
-    assert eval_resp2.json()["detail"] == "El crédito ya ha sido evaluado y se encuentra en estado terminal APROBADO."
+    assert eval_resp2.json()["detail"] == "Solo se pueden evaluar créditos en estado SOLICITADO. Estado actual: APROBADO."
 
 
 def test_persistencia_registro_evaluacion_aprobada(client: TestClient):

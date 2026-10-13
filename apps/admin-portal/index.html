@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0b3b38" />
+    <title>CrediFresh | Administración</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/styles.css?v=20261007-audit-mobile" />
+    <script src="/config.js" defer></script>
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <main id="login-view" class="login-shell">
+      <section class="login-card" aria-labelledby="login-title">
+        <div class="brand-mark" aria-hidden="true">CF</div>
+        <p class="eyebrow">PORTAL CREDIFRESH</p>
+        <h1 id="login-title">Bienvenido a CrediFresh</h1>
+        <p class="muted">Ingresa con tu cuenta CrediFresh para consultar tus opciones disponibles.</p>
+        <form id="login-form" class="stack">
+          <label for="email">Correo electrónico</label>
+          <input id="email" name="email" type="email" autocomplete="username" required />
+          <label for="password">Contraseña</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required />
+          <button class="button button-primary" type="submit">Ingresar</button>
+        </form>
+        <p id="login-message" class="message" role="status" aria-live="polite"></p>
+        <p class="login-footnote">Conexión segura · La sesión termina al cerrar o actualizar esta pestaña</p>
+      </section>
+    </main>
+
+    <div id="client-view" class="client-portal" hidden>
+      <header class="client-portal-header"><a class="brand" href="#mis-creditos"><span class="brand-mark" aria-hidden="true">CF</span><span>CrediFresh</span></a><div class="user-chip"><span><strong>Cliente</strong><small id="client-signed-in-email"></small></span><button id="client-logout-button" class="button button-secondary" type="button">Cerrar sesión</button></div></header>
+      <main class="client-portal-main"><p class="eyebrow">PORTAL DEL CLIENTE</p><h1>Mis créditos</h1><p id="client-portal-message" class="message" role="status" aria-live="polite"></p><div id="client-credit-list" class="client-credit-list"></div></main>
+    </div>
+
+    <div id="app-view" class="app-shell" hidden>
+      <aside class="sidebar">
+        <a class="brand" href="#inicio" aria-label="CrediFresh inicio">
+          <span class="brand-mark">CF</span><span>CrediFresh</span>
+        </a>
+        <p class="nav-label">OPERACIÓN</p>
+        <nav aria-label="Navegación principal">
+          <a class="nav-link active" href="#inicio" data-section-link="inicio" aria-current="page"><span aria-hidden="true">⌂</span>Resumen</a>
+          <a class="nav-link" href="#usuarios" data-section-link="usuarios"><span aria-hidden="true">◎</span>Usuarios</a>
+          <a class="nav-link" href="#clientes" data-section-link="clientes"><span aria-hidden="true">♙</span>Clientes</a>
+          <a class="nav-link" href="#creditos" data-section-link="creditos"><span aria-hidden="true">▤</span>Créditos</a>
+          <a class="nav-link" href="#auditoria" data-section-link="auditoria"><span aria-hidden="true">◷</span>Auditoría</a>
+        </nav>
+        <div class="sidebar-bottom">
+          <span id="api-status-dot" class="online-dot checking"></span><span id="api-status-label" role="status" aria-live="polite">Comprobando conexión…</span>
+          <button id="logout-button" class="button button-quiet" type="button">Cerrar sesión</button>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div><p class="eyebrow">PANEL DE CONTROL</p><h1 id="page-title">Resumen</h1></div>
+          <div class="user-chip"><span class="avatar">A</span><span><strong>Administrador</strong><small id="signed-in-email"></small></span></div>
+        </header>
+
+        <div id="global-message" class="message" role="status" aria-live="polite"></div>
+        <section id="section-inicio" class="page-section" aria-labelledby="overview-title">
+          <div class="section-heading"><div><p class="eyebrow">VISTA GENERAL</p><h2 id="overview-title">Estado de la operación</h2></div><button id="refresh-button" class="button button-secondary" type="button">Actualizar datos</button></div>
+          <div class="metric-grid">
+            <article class="metric-card"><span class="metric-icon mint">♙</span><p>Clientes</p><strong id="metric-clients">—</strong><small>Registros en la cartera</small></article>
+            <article class="metric-card"><span class="metric-icon blue">▤</span><p>Créditos</p><strong id="metric-credits">—</strong><small>Solicitudes registradas</small></article>
+            <article class="metric-card"><span class="metric-icon amber">◎</span><p>Usuarios</p><strong id="metric-users">—</strong><small>Cuentas del sistema</small></article>
+            <article class="metric-card"><span class="metric-icon violet">$</span><p>Monto solicitado</p><strong id="metric-amount">—</strong><small>Total registrado</small></article>
+          </div>
+          <section class="content-card portfolio-ops-card" aria-labelledby="portfolio-ops-title">
+            <div class="card-heading"><div><h3 id="portfolio-ops-title">Seguimiento de cartera</h3><p>Créditos aceptados, saldos y vencimientos registrados.</p></div></div>
+            <div class="portfolio-ops-grid">
+              <div><span>Aceptados sin desembolso</span><strong id="metric-accepted-undisbursed">—</strong><small>El cliente ya aceptó las condiciones</small></div>
+              <div><span>Monto aceptado pendiente</span><strong id="metric-accepted-amount">—</strong><small>Según las condiciones aceptadas</small></div>
+              <div><span>Saldo pendiente de cuotas</span><strong id="metric-pending-balance">—</strong><small>En créditos desembolsados</small></div>
+              <div><span>Cuotas pendientes o parciales</span><strong id="metric-open-installments">—</strong><small>Según el plan registrado</small></div>
+              <div><span>Cuotas vencidas</span><strong id="metric-overdue-installments">—</strong><small id="metric-overdue-balance">Saldo vencido: —</small></div>
+            </div>
+            <p class="form-note">La aceptación no equivale a desembolso. Las cuotas vencidas se calculan por fecha y saldo registrado.</p>
+          </section>
+          <section class="content-card" aria-labelledby="pending-disbursement-title">
+            <div class="card-heading"><div><h3 id="pending-disbursement-title">Aceptados pendientes de desembolso</h3><p>Créditos con condiciones aceptadas que aún no tienen desembolso registrado.</p></div><span id="bank-operations-status" class="status-pill status-unknown" role="status" aria-live="polite">Consultando configuración…</span></div>
+            <p id="bank-operation-note" class="form-note">Consultando si los desembolsos y pagos están habilitados en la API.</p>
+            <p id="pending-disbursement-message" class="message" role="status" aria-live="polite"></p>
+            <div class="pending-search"><label for="pending-disbursement-search">Buscar cliente o crédito</label><input id="pending-disbursement-search" type="search" placeholder="Nombre o número de crédito" autocomplete="off" /><button id="pending-disbursement-export-button" class="button button-secondary" type="button" disabled>Exportar CSV</button></div>
+            <div id="pending-disbursement-table" class="table-wrap"></div>
+            <p class="form-note">Esta lista es informativa y no ejecuta desembolsos. Confirma la transferencia y la recepción de fondos antes de registrar un pago.</p>
+          </section>
+          <section class="content-card" aria-labelledby="overdue-installments-title">
+            <div class="card-heading"><div><h3 id="overdue-installments-title">Seguimiento de cuotas vencidas</h3><p>Cuotas pendientes de créditos desembolsados, ordenadas desde el vencimiento más antiguo.</p></div><button id="overdue-export-button" class="button button-secondary" type="button" disabled>Exportar CSV</button></div>
+            <p id="overdue-installments-message" class="message" role="status" aria-live="polite"></p>
+            <div id="overdue-installments-table" class="table-wrap"></div>
+            <div class="audit-pagination"><span id="overdue-page-info" aria-live="polite">—</span><div><button id="overdue-previous-button" class="button button-secondary" type="button" disabled>Anterior</button><button id="overdue-next-button" class="button button-secondary" type="button" disabled>Siguiente</button></div></div>
+            <p class="form-note">La lista es informativa; no contacta al cliente ni registra pagos.</p>
+          </section>
+          <div class="content-card status-card"><div><div id="service-status-icon" class="status-icon">…</div><div><h3 id="service-status-title">Estado de la plataforma</h3><p id="service-status-description">Comprobando la conexión con la API y la base de datos.</p></div></div><span id="service-status-pill" class="status-pill status-unknown" role="status" aria-live="polite">Verificando</span></div>
+          <section class="content-card"><div class="card-heading"><div><h3>Créditos recientes</h3><p>Últimas solicitudes registradas</p></div><a href="#creditos" class="text-link">Ver todos →</a></div><div id="recent-credits" class="table-wrap"></div></section>
+        </section>
+
+        <section id="section-usuarios" class="page-section" hidden aria-labelledby="users-title">
+          <div class="section-heading"><div><p class="eyebrow">ACCESO AL SISTEMA</p><h2 id="users-title">Usuarios</h2></div><button id="new-user-button" class="button button-primary" type="button">+ Nuevo usuario</button></div>
+          <section id="user-form-panel" class="content-card" hidden>
+            <div class="card-heading"><div><h3>Registrar usuario</h3><p>La cuenta quedará activa al crearla.</p></div></div>
+            <form id="user-form" class="client-form">
+              <label for="user-new-email">Correo electrónico</label>
+              <input id="user-new-email" name="email" type="email" maxlength="254" autocomplete="email" required />
+              <label for="user-new-password">Contraseña temporal</label>
+              <input id="user-new-password" name="password" type="password" minlength="6" autocomplete="new-password" required />
+              <label for="user-new-role">Rol</label>
+              <select id="user-new-role" name="rol" required><option value="" disabled selected>Selecciona un rol</option><option value="CLIENTE">Cliente</option><option value="GESTOR">Gestor</option><option value="ADMIN">Admin</option></select>
+              <p class="form-note">Admin tiene permisos completos para gestionar usuarios y operaciones. Asigna solo el rol necesario.</p>
+              <p id="user-form-message" class="message" role="status" aria-live="polite"></p>
+              <div class="form-actions"><button id="cancel-user-button" class="button button-secondary" type="button">Cancelar</button><button class="button button-primary" type="submit">Crear usuario</button></div>
+            </form>
+          </section>
+          <section class="content-card"><div class="card-heading"><div><h3>Cuentas registradas</h3><p>Roles y estado de acceso</p></div><span id="users-count" class="count-pill">—</span></div><div class="user-filters"><label for="user-role-filter">Rol</label><select id="user-role-filter"><option value="">Todos</option><option value="ADMIN">Admin</option><option value="GESTOR">Gestor</option><option value="CLIENTE">Cliente</option></select><label for="user-active-filter">Estado</label><select id="user-active-filter"><option value="">Todos</option><option value="true">Activo</option><option value="false">Inactivo</option></select><label for="user-email-search">Correo</label><input id="user-email-search" type="search" placeholder="Buscar por correo" autocomplete="off" /></div><div id="users-table" class="table-wrap"></div></section>
+        </section>
+
+        <section id="section-clientes" class="page-section" hidden aria-labelledby="clients-title">
+          <div class="section-heading"><div><p class="eyebrow">CARTERA</p><h2 id="clients-title">Clientes</h2></div><button id="new-client-button" class="button button-primary" type="button">+ Nuevo cliente</button></div>
+          <section id="client-form-panel" class="content-card" hidden>
+            <div class="card-heading"><div><h3>Registrar cliente</h3><p>Los campos se validan antes de enviarlos a la API.</p></div></div>
+            <form id="client-form" class="client-form">
+              <label for="client-name">Nombre completo</label>
+              <input id="client-name" name="nombre" type="text" minlength="2" maxlength="120" autocomplete="name" required />
+              <label for="client-id-number">Cédula</label>
+              <input id="client-id-number" name="cedula" type="text" inputmode="numeric" minlength="5" maxlength="20" pattern="[0-9]{5,20}" required />
+              <label for="client-phone">Teléfono</label>
+              <input id="client-phone" name="telefono" type="tel" inputmode="tel" minlength="7" maxlength="20" pattern="\+?[0-9]{7,20}" required />
+              <label for="client-address">Dirección de residencia</label>
+              <input id="client-address" name="direccion" type="text" maxlength="240" autocomplete="street-address" />
+              <label for="client-email">Correo de contacto</label>
+              <input id="client-email" name="email" type="email" maxlength="254" autocomplete="email" />
+              <p id="client-form-message" class="message" role="status" aria-live="polite"></p>
+              <div class="form-actions"><button id="cancel-client-button" class="button button-secondary" type="button">Cancelar</button><button class="button button-primary" type="submit">Registrar cliente</button></div>
+            </form>
+          </section>
+          <section id="client-profile-panel" class="content-card" hidden>
+            <div class="card-heading"><div><h3 id="client-profile-title">Perfil financiero</h3><p>Información mensual declarada para evaluar capacidad.</p></div><button id="close-profile-button" class="button button-secondary" type="button">Cerrar</button></div>
+            <div class="client-account-link"><div><strong>Acceso del cliente</strong><p>Vincula una cuenta activa para que el cliente consulte sus créditos y acepte condiciones desde su sesión.</p></div><label for="client-linked-user">Cuenta CLIENTE</label><select id="client-linked-user"></select><button id="link-client-account-button" class="button button-secondary" type="button">Vincular cuenta</button><p id="client-account-link-message" class="message" role="status" aria-live="polite"></p></div>
+            <form id="client-contact-form" class="client-form client-contact-form">
+              <div><strong>Datos de contacto</strong><p>Este correo es de contacto. Cambiarlo no cambia el correo para iniciar sesión.</p></div>
+              <label for="contact-client-name">Nombre completo</label><input id="contact-client-name" name="nombre" type="text" minlength="2" maxlength="120" required />
+              <label for="contact-client-id">Cédula</label><input id="contact-client-id" name="cedula" type="text" inputmode="numeric" minlength="5" maxlength="20" pattern="[0-9]{5,20}" required />
+              <label for="contact-client-phone">Teléfono</label><input id="contact-client-phone" name="telefono" type="tel" inputmode="tel" minlength="7" maxlength="20" pattern="\+?[0-9]{7,20}" required />
+              <label for="contact-client-address">Dirección de residencia</label><input id="contact-client-address" name="direccion" type="text" maxlength="240" autocomplete="street-address" />
+              <label for="contact-client-email">Correo de contacto</label><input id="contact-client-email" name="email" type="email" maxlength="254" autocomplete="email" />
+              <p id="client-contact-message" class="message" role="status" aria-live="polite"></p>
+              <div class="form-actions"><button class="button button-primary" type="submit">Guardar datos de contacto</button></div>
+            </form>
+            <p id="profile-message" class="message" role="status" aria-live="polite"></p>
+            <div id="profile-details" class="profile-grid" hidden></div>
+            <form id="profile-form" class="client-form" hidden>
+              <label for="profile-income">Ingresos mensuales (COP)</label>
+              <input id="profile-income" name="ingresos_mensuales" type="number" min="0.01" step="any" inputmode="decimal" required />
+              <label for="profile-expenses">Gastos mensuales (COP)</label>
+              <input id="profile-expenses" name="gastos_mensuales" type="number" min="0" step="any" inputmode="decimal" required />
+              <label for="profile-obligations">Otras obligaciones mensuales (COP)</label>
+              <input id="profile-obligations" name="otras_obligaciones" type="number" min="0" step="any" inputmode="decimal" required />
+              <label for="profile-income-type">Tipo de ingresos</label>
+              <input id="profile-income-type" name="tipo_ingresos" type="text" minlength="2" maxlength="80" required />
+              <label for="profile-activity">Actividad económica</label>
+              <input id="profile-activity" name="actividad_economica" type="text" minlength="2" maxlength="120" required />
+              <p class="form-note">Ingresa información autorizada por el cliente. Los perfiles existentes se pueden actualizar.</p>
+              <div class="form-actions"><button id="cancel-profile-button" class="button button-secondary" type="button">Cancelar</button><button id="profile-submit-button" class="button button-primary" type="submit">Guardar perfil</button></div>
+            </form>
+          </section>
+          <section class="content-card"><div class="card-heading"><div><h3>Directorio de clientes</h3><p>Información de contacto registrada</p></div><span id="clients-count" class="count-pill">—</span></div><div class="client-search"><label for="client-search-input">Buscar cliente</label><input id="client-search-input" type="search" placeholder="Nombre o documento" autocomplete="off" /></div><div id="clients-table" class="table-wrap"></div></section>
+        </section>
+
+        <section id="section-creditos" class="page-section" hidden aria-labelledby="credits-title">
+          <div class="section-heading"><div><p class="eyebrow">FINANCIACIÓN</p><h2 id="credits-title">Créditos</h2></div><button id="new-credit-button" class="button button-primary" type="button">+ Nueva solicitud</button></div>
+          <section id="credit-form-panel" class="content-card" hidden>
+            <div class="card-heading"><div><h3>Nueva solicitud de crédito</h3><p>El backend acepta montos de $500.000 a $1.500.000 COP y plazos hasta 12 meses.</p></div></div>
+            <form id="credit-form" class="client-form">
+              <label for="credit-client">Cliente</label>
+              <select id="credit-client" name="cliente_id" required></select>
+              <label for="credit-amount">Monto solicitado (COP)</label>
+              <input id="credit-amount" name="monto" type="number" min="500000" max="1500000" step="any" inputmode="decimal" required />
+              <label for="credit-term">Plazo (meses)</label>
+              <input id="credit-term" name="plazo_meses" type="number" min="1" max="12" step="1" required />
+              <label for="credit-rate">Tasa mensual (%)</label>
+              <input id="credit-rate" name="tasa_interes" type="number" min="0" step="any" inputmode="decimal" required />
+              <p id="credit-rate-equivalent" class="rate-equivalent-note">La equivalencia E.A. aparecerá al ingresar una tasa mensual.</p>
+              <p class="form-note">Al crearla, la solicitud queda en estado SOLICITADO. Esto no significa que esté aprobada ni desembolsada.</p>
+              <p id="credit-form-message" class="message" role="status" aria-live="polite"></p>
+              <div class="form-actions"><button id="cancel-credit-button" class="button button-secondary" type="button">Cancelar</button><button class="button button-primary" type="submit">Crear solicitud</button></div>
+            </form>
+          </section>
+          <section class="content-card"><div class="card-heading"><div><h3>Solicitudes</h3><p>Evalúa con las reglas automáticas o rechaza manualmente indicando el motivo.</p></div><span id="credits-count" class="count-pill">—</span></div><div id="credit-state-summary" class="credit-state-summary" aria-live="polite"></div><div class="credit-filters"><label for="credit-status-filter">Estado</label><select id="credit-status-filter"><option value="">Todos</option><option value="SOLICITADO">Solicitado</option><option value="APROBADO">Aprobado</option><option value="RECHAZADO">Rechazado</option><option value="DESEMBOLSADO">Desembolsado</option><option value="PAGADO">Pagado</option></select><label for="credit-client-search">Cliente</label><input id="credit-client-search" type="search" placeholder="Buscar por nombre" autocomplete="off" /></div><div id="credits-table" class="table-wrap"></div></section>
+          <section id="credit-details-panel" class="content-card" hidden aria-labelledby="credit-details-title">
+            <div class="card-heading"><div><h3 id="credit-details-title">Detalle del crédito</h3><p>Solicitud y resultado de evaluación, si existe.</p></div><button id="close-credit-details-button" class="button button-secondary" type="button">Cerrar</button></div>
+            <p id="credit-details-message" class="message" role="status" aria-live="polite"></p>
+            <div id="credit-request-details" class="profile-grid"></div>
+            <form id="credit-rate-form" class="credit-simulation-panel" hidden>
+              <div class="card-heading"><div><h3>Asignar tasa mensual</h3><p>Define la tasa antes de evaluar. La tasa se mostrará al cliente junto con la oferta.</p></div></div>
+              <div class="credit-simulation-controls"><label for="credit-rate-value">Tasa mensual (%)</label><input id="credit-rate-value" type="number" min="0.01" max="100" step="0.01" required /><button id="credit-rate-save" class="button button-primary" type="submit">Guardar tasa</button></div>
+              <p id="credit-rate-message" class="message" role="status" aria-live="polite"></p>
+            </form>
+            <form id="credit-rejection-form" class="credit-simulation-panel" hidden>
+              <div class="card-heading"><div><h3>Rechazar solicitud manualmente</h3><p>El rechazo será definitivo. Registra un motivo claro para el historial administrativo.</p></div></div>
+              <label for="credit-rejection-reason">Motivo del rechazo</label>
+              <textarea id="credit-rejection-reason" rows="3" minlength="5" maxlength="500" required placeholder="Escribe el motivo (5 a 500 caracteres)"></textarea>
+              <div class="form-actions"><button id="credit-rejection-submit" class="button button-secondary" type="submit">Rechazar solicitud</button></div>
+              <p id="credit-rejection-message" class="message" role="status" aria-live="polite"></p>
+            </form>
+            <div id="credit-evaluation-details" class="profile-grid" hidden></div>
+            <div id="credit-acceptance-details" class="profile-grid" hidden></div>
+            <div id="credit-simulation-panel" class="credit-simulation-panel" hidden>
+              <div class="card-heading"><div><h3>Simulación estimada de cuotas</h3><p>No desembolsa el crédito ni crea cuotas en la base de datos.</p></div></div>
+              <div class="credit-simulation-controls"><label for="credit-simulation-date">Fecha tentativa de desembolso</label><input id="credit-simulation-date" type="date" required /><button id="simulate-credit-button" class="button button-secondary" type="button">Simular plan</button></div>
+              <p id="credit-simulation-message" class="message" role="status" aria-live="polite"></p>
+              <div id="credit-simulation-summary" class="credit-simulation-summary"></div>
+              <div id="credit-amortization-table" class="table-wrap"></div>
+            </div>
+          </section>
+        </section>
+        <section id="section-auditoria" class="page-section" hidden aria-labelledby="audit-title">
+          <div class="section-heading"><div><p class="eyebrow">TRAZABILIDAD</p><h2 id="audit-title">Auditoría administrativa</h2></div><button id="audit-refresh-button" class="button button-secondary" type="button">Actualizar eventos</button></div>
+          <section class="content-card"><div class="card-heading"><div><h3>Eventos del sistema</h3><p>Consulta de aceptaciones y operaciones registradas. Solo lectura.</p></div><div class="audit-card-actions"><span id="audit-count" class="count-pill">—</span><button id="audit-export-button" class="button button-secondary" type="button" disabled>Exportar CSV</button></div></div>
+            <form id="audit-filters" class="audit-filters">
+              <label for="audit-action-filter">Acción</label><input id="audit-action-filter" type="search" list="audit-action-options" placeholder="Buscar acción" autocomplete="off" /><datalist id="audit-action-options"></datalist>
+              <label for="audit-result-filter">Resultado</label><select id="audit-result-filter"><option value="">Todos</option><option value="EXITOSO">Exitoso</option><option value="BLOQUEADO">Bloqueado</option><option value="FALLIDO">Fallido</option></select>
+              <label for="audit-entity-filter">Tipo de entidad</label><select id="audit-entity-filter"><option value="">Todas</option><option value="credito">Crédito</option><option value="cliente">Cliente</option><option value="usuario">Usuario</option></select>
+              <label for="audit-entity-id-filter">ID de entidad</label><input id="audit-entity-id-filter" type="number" min="1" step="1" inputmode="numeric" placeholder="Elige tipo" disabled />
+              <label for="audit-user-filter">Usuario</label><select id="audit-user-filter"><option value="">Todos los usuarios</option></select>
+              <label for="audit-ip-filter">IP observada</label><input id="audit-ip-filter" type="search" maxlength="45" placeholder="Dirección exacta" autocomplete="off" />
+              <label for="audit-from-filter">Desde</label><input id="audit-from-filter" type="date" />
+              <label for="audit-to-filter">Hasta</label><input id="audit-to-filter" type="date" />
+              <button class="button button-primary" type="submit">Aplicar filtros</button><button id="audit-clear-button" class="button button-secondary" type="button">Limpiar</button>
+            </form>
+            <p id="audit-message" class="message" role="status" aria-live="polite"></p><div id="audit-table" class="table-wrap"></div>
+            <div class="audit-pagination"><span id="audit-page-info" aria-live="polite">—</span><div><button id="audit-previous-button" class="button button-secondary" type="button" disabled>Anterior</button><button id="audit-next-button" class="button button-secondary" type="button" disabled>Siguiente</button></div></div>
+          </section>
+        </section>
+        <footer class="page-footer">CrediFresh · Administración</footer>
+      </main>
+    </div>
+  </body>
+</html>

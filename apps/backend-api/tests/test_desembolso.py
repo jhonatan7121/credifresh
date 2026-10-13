@@ -4,6 +4,7 @@ from decimal import Decimal
 from app.models.amortizacion import CuotaAmortizacion
 from app.models.evaluacion import Evaluacion
 from app.models.credito import Credito
+from app.models.cliente import Cliente
 from conftest import TestSessionLocal
 
 # Helper para evitar colisiones de cédula en ejecuciones sucesivas
@@ -17,6 +18,56 @@ def generar_datos_cliente_test():
         "cedula": str(_ced_counter),
         "telefono": "3129876543"
     }
+
+
+def aceptar_condiciones_como_cliente(client, cliente_id, credito_id):
+    user_email = f"cliente_desembolso_{credito_id}@credifresh.com"
+    reg_resp = client.post("/auth/register", json={
+        "email": user_email,
+        "password": "password123"
+    })
+    assert reg_resp.status_code == 201
+    user_id = reg_resp.json()["id"]
+
+    db = TestSessionLocal()
+    try:
+        cliente = db.query(Cliente).filter(Cliente.id == cliente_id).first()
+        cliente.usuario_id = user_id
+        db.commit()
+    finally:
+        db.close()
+
+    login_resp = client.post("/auth/login", json={
+        "email": user_email,
+        "password": "password123"
+    })
+    assert login_resp.status_code == 200
+    cliente_headers = {"Authorization": f"Bearer {login_resp.json()['access_token']}"}
+
+    from main import app
+    from app.core.deps import get_current_user, get_current_active_user
+    old_current_user = app.dependency_overrides.pop(get_current_user, None)
+    old_active_user = app.dependency_overrides.pop(get_current_active_user, None)
+    try:
+        creditos_resp = client.get("/creditos/mis", headers=cliente_headers)
+        assert creditos_resp.status_code == 200, creditos_resp.text
+        credito_data = next(item for item in creditos_resp.json() if item["credito"]["id"] == credito_id)
+        evaluacion = credito_data["evaluacion"]
+
+        aceptar_resp = client.post(f"/creditos/{credito_id}/aceptar", json={
+            "acepta": True,
+            "monto": credito_data["credito"]["monto"],
+            "plazo_meses": credito_data["credito"]["plazo_meses"],
+            "tasa_interes": credito_data["credito"]["tasa_interes"],
+            "cuota_mensual": evaluacion["cuota_mensual"],
+            "total_estimado": credito_data["total_estimado"]
+        }, headers=cliente_headers)
+        assert aceptar_resp.status_code == 201, aceptar_resp.text
+    finally:
+        if old_current_user:
+            app.dependency_overrides[get_current_user] = old_current_user
+        if old_active_user:
+            app.dependency_overrides[get_current_active_user] = old_active_user
 
 
 @pytest.fixture
@@ -79,8 +130,17 @@ def test_desembolso_flujo_completo(client: TestClient):
     assert eval_data["decision"] == "APROBADO"
     cuota_esperada = eval_data["cuota_mensual"]
 
-    # 5. Ejecutar el desembolso (Con el usuario de bypass con rol ADMIN)
+    # 5. El cliente acepta las condiciones desde su propia sesión.
+    aceptar_condiciones_como_cliente(client, cliente_id, credito_id)
+
+    # 6. Ejecutar el desembolso con el usuario de bypass ADMIN
     desem_resp = client.post(f"/creditos/{credito_id}/desembolsar")
+
+    print("\n===== DESEMBOLSO =====")
+    print("STATUS:", desem_resp.status_code)
+    print("BODY:", desem_resp.text)
+    print("======================\n")
+
     assert desem_resp.status_code == 200
     desem_data = desem_resp.json()
     assert desem_data["mensaje"] == "Crédito desembolsado correctamente"
@@ -200,6 +260,9 @@ def test_bloqueo_desembolso_duplicado_y_evitar_cuotas_duplicadas(client: TestCli
 
     # Evaluar
     client.post(f"/creditos/{credito_id}/evaluar")
+
+    # El cliente acepta las condiciones antes del desembolso.
+    aceptar_condiciones_como_cliente(client, cliente_id, credito_id)
 
     # Primer desembolso (Debe ser exitoso)
     resp1 = client.post(f"/creditos/{credito_id}/desembolsar")

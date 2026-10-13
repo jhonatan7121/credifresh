@@ -52,6 +52,33 @@ def registrar_usuario_y_cliente(client: TestClient, email: str, rol: str = "CLIE
     return {"usuario_id": usuario_id, "token": token, "cliente_id": cliente_id}
 
 
+def aceptar_condiciones_notificacion(client: TestClient, user_info: dict, credito_id: int):
+    headers = {"Authorization": f"Bearer {user_info['token']}"}
+    from main import app
+    from app.core.deps import get_current_user, get_current_active_user
+    old_user = app.dependency_overrides.pop(get_current_user, None)
+    old_active = app.dependency_overrides.pop(get_current_active_user, None)
+    try:
+        creditos = client.get("/creditos/mis", headers=headers)
+        assert creditos.status_code == 200, creditos.text
+        credito = next(item for item in creditos.json() if item["credito"]["id"] == credito_id)
+        evaluation = credito["evaluacion"]
+        accepted = client.post(f"/creditos/{credito_id}/aceptar", headers=headers, json={
+            "acepta": True,
+            "monto": credito["credito"]["monto"],
+            "plazo_meses": credito["credito"]["plazo_meses"],
+            "tasa_interes": credito["credito"]["tasa_interes"],
+            "cuota_mensual": evaluation["cuota_mensual"],
+            "total_estimado": credito["total_estimado"],
+        })
+        assert accepted.status_code == 201, accepted.text
+    finally:
+        if old_user:
+            app.dependency_overrides[get_current_user] = old_user
+        if old_active:
+            app.dependency_overrides[get_current_active_user] = old_active
+
+
 def test_notificacion_creacion_solicitud(client: TestClient):
     """1. Creación de notificación por solicitud de crédito cuando existe usuario."""
     user_info = registrar_usuario_y_cliente(client, "solicitudnotif@credifresh.com")
@@ -134,6 +161,7 @@ def test_notificacion_desembolso(client: TestClient):
     credito_id = cred_resp.json()["credito"]["id"]
 
     client.post(f"/creditos/{credito_id}/evaluar")
+    aceptar_condiciones_notificacion(client, user_info, credito_id)
     desem_resp = client.post(f"/creditos/{credito_id}/desembolsar")
     assert desem_resp.status_code == 200
 
@@ -213,8 +241,8 @@ def test_marcar_notificacion_leida_y_idor(client: TestClient):
             app.dependency_overrides[get_current_active_user] = old_active
 
 
-def test_notificacion_sin_auth_401(client: TestClient):
-    """9. Solicitud sin autenticación devuelve 401."""
+def test_notificacion_sin_auth_403(client: TestClient):
+    """9. Solicitud sin autenticación devuelve 403 según HTTPBearer."""
     from main import app
     from app.core.deps import get_current_user, get_current_active_user
     old_user = app.dependency_overrides.pop(get_current_user, None)
@@ -222,7 +250,7 @@ def test_notificacion_sin_auth_401(client: TestClient):
 
     try:
         resp = client.get("/notificaciones/")
-        assert resp.status_code == 401
+        assert resp.status_code == 403
     finally:
         if old_user:
             app.dependency_overrides[get_current_user] = old_user

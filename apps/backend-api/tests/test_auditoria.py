@@ -5,6 +5,7 @@ from conftest import TestSessionLocal
 from app.models.audit_log import AuditLog
 from app.models.credito import Credito
 from app.models.amortizacion import CuotaAmortizacion
+from app.models.cliente import Cliente
 
 _ced_auditoria = 9000000
 
@@ -39,6 +40,57 @@ def preparar_credito_para_auditoria(client: TestClient) -> int:
     })
     assert cred_resp.status_code == 201
     return cred_resp.json()["credito"]["id"]
+
+
+def aceptar_condiciones_auditoria(client: TestClient, credito_id: int) -> None:
+    db = TestSessionLocal()
+    try:
+        credito = db.query(Credito).filter(Credito.id == credito_id).first()
+        cliente = db.query(Cliente).filter(Cliente.id == credito.cliente_id).first()
+        cliente_id = cliente.id
+    finally:
+        db.close()
+
+    email = f"cliente_auditoria_{credito_id}@credifresh.com"
+    register = client.post("/auth/register", json={"email": email, "password": "password123"})
+    assert register.status_code == 201
+    user_id = register.json()["id"]
+
+    db = TestSessionLocal()
+    try:
+        cliente = db.query(Cliente).filter(Cliente.id == cliente_id).first()
+        cliente.usuario_id = user_id
+        db.commit()
+    finally:
+        db.close()
+
+    login = client.post("/auth/login", json={"email": email, "password": "password123"})
+    assert login.status_code == 200
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    from main import app
+    from app.core.deps import get_current_user, get_current_active_user
+    old_user = app.dependency_overrides.pop(get_current_user, None)
+    old_active = app.dependency_overrides.pop(get_current_active_user, None)
+    try:
+        creditos = client.get("/creditos/mis", headers=headers)
+        assert creditos.status_code == 200, creditos.text
+        credito = next(item for item in creditos.json() if item["credito"]["id"] == credito_id)
+        evaluation = credito["evaluacion"]
+        accepted = client.post(f"/creditos/{credito_id}/aceptar", headers=headers, json={
+            "acepta": True,
+            "monto": credito["credito"]["monto"],
+            "plazo_meses": credito["credito"]["plazo_meses"],
+            "tasa_interes": credito["credito"]["tasa_interes"],
+            "cuota_mensual": evaluation["cuota_mensual"],
+            "total_estimado": credito["total_estimado"],
+        })
+        assert accepted.status_code == 201, accepted.text
+    finally:
+        if old_user:
+            app.dependency_overrides[get_current_user] = old_user
+        if old_active:
+            app.dependency_overrides[get_current_active_user] = old_active
 
 
 def test_auditoria_evaluacion_automatica(client: TestClient):
@@ -76,6 +128,7 @@ def test_auditoria_desembolso_automatico(client: TestClient):
     credito_id = preparar_credito_para_auditoria(client)
     client.post(f"/creditos/{credito_id}/evaluar")
     client.patch(f"/creditos/{credito_id}/estado", json={"estado": "APROBADO"})
+    aceptar_condiciones_auditoria(client, credito_id)
 
     desem_resp = client.post(f"/creditos/{credito_id}/desembolsar")
     assert desem_resp.status_code == 200
@@ -96,6 +149,7 @@ def test_auditoria_pago_y_liquidacion(client: TestClient):
     """4. Verificar pago y liquidación (REGISTRAR_PAGO y LIQUIDAR_CREDITO)."""
     credito_id = preparar_credito_para_auditoria(client)
     client.post(f"/creditos/{credito_id}/evaluar")
+    aceptar_condiciones_auditoria(client, credito_id)
     client.post(f"/creditos/{credito_id}/desembolsar")
 
     db = TestSessionLocal()
@@ -138,7 +192,7 @@ def test_consulta_auditoria_exitoso_admin(client: TestClient):
 
 
 def test_consulta_auditoria_bloqueado_gestor_cliente_sin_auth(client: TestClient):
-    """6. Verificar GESTOR (403), CLIENTE (403) y sin token (401)."""
+    """6. Verificar GESTOR (403), CLIENTE (403) y sin token (403)."""
     client.post("/auth/register", json={"email": "gestoraud@credifresh.com", "password": "password123", "rol": "GESTOR"})
     login_gestor = client.post("/auth/login", json={"email": "gestoraud@credifresh.com", "password": "password123"})
     token_gestor = login_gestor.json()["access_token"]
@@ -162,7 +216,7 @@ def test_consulta_auditoria_bloqueado_gestor_cliente_sin_auth(client: TestClient
         assert resp_c.status_code == 403
 
         resp_no_auth = client.get("/auditoria")
-        assert resp_no_auth.status_code == 401
+        assert resp_no_auth.status_code == 403
     finally:
         if old_user:
             app.dependency_overrides[get_current_user] = old_user

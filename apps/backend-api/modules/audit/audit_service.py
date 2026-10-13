@@ -1,6 +1,7 @@
 import json
 from app.models.audit_log import AuditLog
 from app.models.usuario import Usuario
+from modules.audit.audit_context import get_audit_request_ip
 
 
 def registrar_auditoria(
@@ -19,6 +20,8 @@ def registrar_auditoria(
     """
     usuario_id = usuario.id if usuario else None
     rol = usuario.rol if usuario else "SISTEMA"
+    if ip is None:
+        ip = get_audit_request_ip()
 
     detalles_str = None
     if isinstance(detalles, dict):

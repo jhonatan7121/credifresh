@@ -1,0 +1,61 @@
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: credifresh-postgres
+    environment:
+      POSTGRES_USER: credifresh_user
+      POSTGRES_PASSWORD: credifresh_password
+      POSTGRES_DB: credifresh_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U credifresh_user -d credifresh_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend-api:
+    build:
+      context: ./apps/backend-api
+      dockerfile: Dockerfile
+    container_name: credifresh-api
+    environment:
+      DATABASE_URL: ${CREDIFRESH_DATABASE_URL:-postgresql+psycopg://credifresh_user:credifresh_password@postgres:5432/credifresh_db}
+      SECRET_KEY: ${SECRET_KEY}
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USE_SSL: ${SMTP_USE_SSL:-false}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-}
+      RESET_PASSWORD_URL: ${RESET_PASSWORD_URL:-credifresh://reset-password}
+      BANK_OPERATIONS_ENABLED: ${BANK_OPERATIONS_ENABLED:-false}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: always
+
+  admin-portal:
+    build:
+      context: ./apps/admin-portal
+      dockerfile: Dockerfile
+    container_name: credifresh-admin-portal
+    environment:
+      API_BASE_URL: ${API_BASE_URL:-http://localhost:8000}
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend-api
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

@@ -58,12 +58,12 @@ def test_registro_no_permite_escalar_a_gestor(client: TestClient):
     assert response.json()["rol"] == "CLIENTE"
 
 def test_endpoints_protegidos_sin_jwt(client: TestClient):
-    assert client.get("/clientes/").status_code == 401
-    assert client.get("/clientes/1").status_code == 401
-    assert client.post("/clientes/", json={}).status_code == 401
-    assert client.get("/creditos/").status_code == 401
-    assert client.get("/creditos/1").status_code == 401
-    assert client.post("/creditos/", json={}).status_code == 401
+    assert client.get("/clientes/").status_code == 403
+    assert client.get("/clientes/1").status_code == 403
+    assert client.post("/clientes/", json={}).status_code == 403
+    assert client.get("/creditos/").status_code == 403
+    assert client.get("/creditos/1").status_code == 403
+    assert client.post("/creditos/", json={}).status_code == 403
 
 def test_cliente_no_puede_listar_clientes(client: TestClient):
     db = get_test_db()

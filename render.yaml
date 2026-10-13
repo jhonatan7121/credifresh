@@ -1,0 +1,67 @@
+# Deployment blueprint for a separate hosted environment.
+# Creating these services in Render uses paid compute and database resources.
+# Review the estimated monthly cost in Render before confirming resource creation.
+services:
+  - type: web
+    name: credifresh-api-prod
+    runtime: docker
+    region: virginia
+    plan: 0.5c-512mb
+    dockerfilePath: ./apps/backend-api/Dockerfile
+    dockerContext: ./apps/backend-api
+    autoDeployTrigger: off
+    healthCheckPath: /health
+    preDeployCommand: alembic upgrade head
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: credifresh-db-prod
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "30"
+      - key: SMTP_HOST
+        value: smtp-relay.brevo.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USE_SSL
+        value: "false"
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM_EMAIL
+        sync: false
+      - key: RESET_PASSWORD_URL
+        value: https://credifresh-portal-prod.onrender.com/reset-password.html
+      - key: ALLOWED_ORIGINS
+        value: https://credifresh-portal-prod.onrender.com
+      - key: BANK_OPERATIONS_ENABLED
+        value: "false"
+      - key: ENVIRONMENT
+        value: production
+
+  - type: web
+    name: credifresh-portal-prod
+    runtime: docker
+    region: virginia
+    plan: 0.5c-512mb
+    dockerfilePath: ./apps/admin-portal/Dockerfile
+    dockerContext: ./apps/admin-portal
+    autoDeployTrigger: off
+    envVars:
+      - key: API_BASE_URL
+        value: https://credifresh-api-prod.onrender.com
+
+databases:
+  - name: credifresh-db-prod
+    databaseName: credifresh_db
+    user: credifresh_user
+    region: virginia
+    plan: 0.5c-1g
+    diskSizeGB: 5
+    postgresMajorVersion: "15"
+    ipAllowList: []
