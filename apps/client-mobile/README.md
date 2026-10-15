@@ -35,6 +35,18 @@ Aceptar una oferta no desembolsa el crédito. Los desembolsos y pagos reales sig
 
 Si Expo Go no detecta el servidor, revisa que ambos dispositivos sigan en la misma Wi-Fi. Si el servidor Expo se cerró, vuelve a ejecutar el comando.
 
+## Probar con la API gratuita de Render
+
+Para que las solicitudes y consultas del iPhone lleguen a la API alojada, sin iniciar la API local ni Docker:
+
+1. Conecta el computador y el iPhone a la misma Wi-Fi y, en la raíz del repositorio, ejecuta `start-credifresh-cloud-mobile.cmd`.
+2. Escanea con Expo Go el QR que muestra la terminal.
+3. La API gratuita puede tardar cerca de un minuto en despertar después de estar inactiva; vuelve a actualizar si la primera consulta tarda.
+
+Este modo conecta el cliente a `https://credifresh-api-demo.onrender.com`. Expo Go todavía carga la app desde el computador, por lo que la terminal debe permanecer abierta. Para abrir CrediFresh sin depender del computador se necesita compilar e instalar una app iOS independiente; la distribución de prueba en iPhone requiere configurar la firma de Apple.
+
+La API usa una base de datos temporal de demostración que vence el 13 de noviembre de 2026. No ingreses datos reales de clientes. El plan gratuito también bloquea SMTP saliente, así que la recuperación de contraseñas por correo no funcionará allí.
+
 ## Configuración manual
 
 Si no usas el iniciador de la raíz del proyecto, copia `.env.example` como `.env` y configura `EXPO_PUBLIC_API_BASE_URL` con la IP local del computador y el puerto `8000`, por ejemplo `http://192.168.1.25:8000`. No uses `localhost` en el iPhone: apuntaría al propio teléfono. Desde esta carpeta instala dependencias con `npm.cmd install` y ejecuta `npm.cmd start`.
