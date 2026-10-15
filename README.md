@@ -100,6 +100,8 @@ docker stop credifresh-postgres-isolated-tests
 
 ## Estado de publicación
 
-El archivo [`render.yaml`](render.yaml) prepara un despliegue de prueba en Render con API, portal administrativo y PostgreSQL administrado en Virginia. Usa planes de pago para evitar que la API se duerma, que la base temporal venza y que se bloquee el SMTP. Al conectarlo a Render, confirma primero los precios que muestre el proveedor: crear los servicios activa cobros. El blueprint deja desactivados los despliegues automáticos; no crees los recursos ni pegues las credenciales SMTP hasta haber revisado esos importes.
+El archivo [`render.yaml`](render.yaml) prepara una prueba gratuita en Render con la API, un portal estático y PostgreSQL. Selecciona planes gratuitos y deja desactivados los despliegues automáticos. El portal genera `config.js` durante la compilación para conectarse a la API.
 
-El despliegue usa una base nueva y vacía. No se deben copiar datos de prueba o datos personales de clientes al entorno público. Antes de distribuir una app iOS, configura `EXPO_PUBLIC_API_BASE_URL` con la URL HTTPS de la API y compila una versión de producción. La transferencia bancaria y la conciliación de fondos siguen siendo un paso posterior.
+Este entorno es temporal y solo sirve para probar: Render puede dormir la API después de 15 minutos sin tráfico, por lo que la primera petición puede tardar cerca de un minuto. PostgreSQL gratuito tiene 1 GB, no incluye copias de seguridad y vence a los 30 días; si vence, los datos se eliminan después del periodo de gracia del proveedor. No uses información real de clientes. Render Free bloquea el envío SMTP saliente en los puertos habituales, así que el restablecimiento de contraseña por correo no funcionará con la configuración SMTP actual.
+
+El despliegue usa una base nueva y vacía. Antes de distribuir una app iOS, configura `EXPO_PUBLIC_API_BASE_URL` con la URL HTTPS de la API y compila una versión de producción. Para operar con datos reales, disponibilidad continua, respaldo y correo, habrá que planear un entorno de pago y revisar sus costos. La transferencia bancaria y la conciliación de fondos siguen siendo un paso posterior.
