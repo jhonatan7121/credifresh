@@ -1,13 +1,15 @@
 import logging
 import os
 import smtplib
+import hmac
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
 from jose import JWTError, jwt
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
@@ -31,6 +33,11 @@ class UsuarioCreate(BaseModel):
 class UsuarioLogin(BaseModel):
     email: str = Field(..., pattern=r"^[\w\.-]+@[\w\.-]+\.\w+$")
     password: str = Field(..., min_length=6)
+
+
+class BootstrapAdminRequest(BaseModel):
+    email: str = Field(..., pattern=r"^[\w\.-]+@[\w\.-]+\.\w+$", max_length=254)
+    password: str = Field(..., min_length=12, max_length=72)
 
 
 class PasswordResetRequest(BaseModel):
@@ -87,6 +94,67 @@ def obtener_sesion_actual(
     current_user: UsuarioModel = Depends(get_current_active_user),
 ):
     return current_user
+
+
+@router.post("/bootstrap-admin", response_model=UsuarioResponse, status_code=201)
+def crear_administrador_inicial(
+    request: BootstrapAdminRequest,
+    x_admin_bootstrap_token: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """Create the first cloud admin only when a temporary secret is configured."""
+    expected_token = os.getenv("ADMIN_BOOTSTRAP_TOKEN", "")
+    provided_token = x_admin_bootstrap_token or ""
+    # Stay unavailable by default and reject weak/missing configuration.
+    if len(expected_token) < 32:
+        raise HTTPException(status_code=404, detail="Recurso no disponible")
+    if not hmac.compare_digest(provided_token.encode("utf-8"), expected_token.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="No autorizado")
+
+    try:
+        # Serialize concurrent attempts on Render's PostgreSQL database.
+        if db.bind and db.bind.dialect.name == "postgresql":
+            db.execute(text("LOCK TABLE usuarios IN EXCLUSIVE MODE"))
+
+        active_admin = (
+            db.query(UsuarioModel)
+            .filter(UsuarioModel.rol == "ADMIN", UsuarioModel.activo.is_(True))
+            .first()
+        )
+        if active_admin:
+            raise HTTPException(status_code=409, detail="Ya existe un administrador activo; el alta inicial está cerrada")
+
+        email = request.email.strip().lower()
+        existing_user = db.query(UsuarioModel).filter(UsuarioModel.email == email).first()
+        if existing_user:
+            raise HTTPException(status_code=409, detail="Ese correo ya está registrado")
+
+        admin = UsuarioModel(
+            email=email,
+            password_hash=get_password_hash(request.password),
+            rol="ADMIN",
+            activo=True,
+        )
+        db.add(admin)
+        db.flush()
+        registrar_auditoria(
+            db=db,
+            usuario=admin,
+            accion="CREAR_ADMIN_INICIAL",
+            entidad="usuario",
+            entidad_id=admin.id,
+            detalles={"origen": "bootstrap_remoto"},
+        )
+        db.commit()
+        db.refresh(admin)
+        return admin
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        logger.exception("Falló el alta inicial del administrador")
+        raise HTTPException(status_code=503, detail="No se pudo completar el alta inicial; revisa que la base de datos esté disponible")
 
 
 @router.post("/password-reset/request", status_code=202)

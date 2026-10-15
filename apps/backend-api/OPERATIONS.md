@@ -58,6 +58,40 @@ El comando solicita el correo y la nueva contraseña de forma interactiva,
 oculta la contraseña, exige confirmarla y no modifica el rol ni el estado de
 la cuenta.
 
+### Crear el primer administrador en Render Free
+
+Render Free no ofrece una terminal para ejecutar `crear_admin.py`. Para una
+base alojada vacía, despliega primero la versión de la API que incluye
+`POST /auth/bootstrap-admin`. En el servicio API de Render, agrega
+`ADMIN_BOOTSTRAP_TOKEN` con un secreto aleatorio de al menos 32 caracteres.
+No lo compartas ni lo guardes en Git. En tu equipo, ejecuta:
+
+```powershell
+.\apps\backend-api\scripts\crear_admin_render.ps1
+```
+
+El script pregunta la URL HTTPS de la API, el correo, el token (oculto) y una
+contraseña nueva (oculta; mínimo 12 caracteres). Envía esos datos directamente
+a la API y no los escribe en archivos. El endpoint se mantiene cerrado si no
+existe la variable, exige el token y rechaza el alta si ya existe cualquier
+administrador activo. Al terminar correctamente, elimina
+`ADMIN_BOOTSTRAP_TOKEN` de las variables del servicio Render. No vuelvas a
+usar ese token. Después inicia sesión en el portal alojado y vincula la cuenta
+de administración a los perfiles de clientes que correspondan.
+
+Para generar un token hexadecimal aleatorio en Windows PowerShell o PowerShell 7:
+
+```powershell
+$bytes = New-Object byte[] 32
+$rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+$rng.GetBytes($bytes)
+[BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
+$rng.Dispose()
+```
+
+La respuesta no crea perfiles de clientes ni copia datos desde la base local;
+esos registros se deben crear o vincular en la base alojada por separado.
+
 ## Operaciones bancarias
 
 `BANK_OPERATIONS_ENABLED` permanece en `false` mientras no esté configurado el
