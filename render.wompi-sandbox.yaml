@@ -1,0 +1,33 @@
+# Isolated, disposable Wompi collection sandbox. Never merge into render.yaml.
+services:
+  - type: web
+    name: credifresh-wompi-sandbox
+    runtime: docker
+    region: virginia
+    plan: free
+    dockerfilePath: ./apps/backend-api/Dockerfile
+    dockerContext: ./apps/backend-api
+    dockerCommand: sh scripts/start_wompi_sandbox.sh
+    autoDeployTrigger: off
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        value: sqlite:////tmp/credifresh-wompi-sandbox.db
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ENVIRONMENT
+        value: sandbox
+      - key: WOMPI_ENVIRONMENT
+        value: sandbox
+      - key: WOMPI_PRIVATE_KEY
+        sync: false
+      - key: WOMPI_EVENTS_SECRET
+        sync: false
+      - key: WOMPI_SANDBOX_SEED_DATA
+        value: "true"
+      - key: WOMPI_SANDBOX_TEST_PASSWORD
+        sync: false
+      - key: BANK_OPERATIONS_ENABLED
+        value: "false"
+      - key: ALLOWED_ORIGINS
+        value: https://sandbox.invalid

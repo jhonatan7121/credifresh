@@ -25,7 +25,7 @@ def aceptar_condiciones_como_cliente(client, cliente_id, credito_id, user_email=
         user_email = f"cliente_pagos_{credito_id}@credifresh.com"
         reg_resp = client.post("/auth/register", json={
             "email": user_email,
-            "password": "password123"
+            "password": "PruebaSegura123"
         })
         assert reg_resp.status_code == 201
         user_id = reg_resp.json()["id"]
@@ -40,7 +40,7 @@ def aceptar_condiciones_como_cliente(client, cliente_id, credito_id, user_email=
 
     login_resp = client.post("/auth/login", json={
         "email": user_email,
-        "password": "password123"
+        "password": "PruebaSegura123"
     })
     assert login_resp.status_code == 200
     cliente_headers = {"Authorization": f"Bearer {login_resp.json()['access_token']}"}
@@ -352,8 +352,8 @@ def test_control_roles_cliente_no_puede_pagar(client: TestClient):
 
     # Registrar cliente y obtener token
     user_email = "cliente_pagador@credifresh.com"
-    client.post("/auth/register", json={"email": user_email, "password": "password123"})
-    login_resp = client.post("/auth/login", json={"email": user_email, "password": "password123"})
+    client.post("/auth/register", json={"email": user_email, "password": "PruebaSegura123"})
+    login_resp = client.post("/auth/login", json={"email": user_email, "password": "PruebaSegura123"})
     token = login_resp.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -396,7 +396,7 @@ def test_consulta_amortizacion_propio_cliente(client: TestClient):
     """10. Un CLIENTE puede consultar la amortización de su propio crédito."""
     # Registrar el usuario mediante el endpoint oficial
     user_email = "dueno@credifresh.com"
-    reg_resp = client.post("/auth/register", json={"email": user_email, "password": "password123"})
+    reg_resp = client.post("/auth/register", json={"email": user_email, "password": "PruebaSegura123"})
     assert reg_resp.status_code == 201
     user_id = reg_resp.json()["id"]
 
@@ -425,7 +425,7 @@ def test_consulta_amortizacion_propio_cliente(client: TestClient):
     client.post(f"/creditos/{credito_id}/desembolsar")
 
     # Iniciar sesión con el usuario recién registrado
-    login_resp = client.post("/auth/login", json={"email": user_email, "password": "password123"})
+    login_resp = client.post("/auth/login", json={"email": user_email, "password": "PruebaSegura123"})
     token = login_resp.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -470,7 +470,7 @@ def test_consulta_pagos_propio_cliente(client: TestClient):
     """12. Un CLIENTE puede consultar su propio historial de pagos (con validaciones de Decimal)."""
     # Registrar el usuario mediante el endpoint oficial
     user_email = "duenopago@credifresh.com"
-    reg_resp = client.post("/auth/register", json={"email": user_email, "password": "password123"})
+    reg_resp = client.post("/auth/register", json={"email": user_email, "password": "PruebaSegura123"})
     assert reg_resp.status_code == 201
     user_id = reg_resp.json()["id"]
 
@@ -500,7 +500,7 @@ def test_consulta_pagos_propio_cliente(client: TestClient):
     client.post(f"/creditos/{credito_id}/pagos", json={"monto": "50000.00", "metodo_pago": "TRANSFERENCIA"})
 
     # Iniciar sesión con el usuario recién registrado
-    login_resp = client.post("/auth/login", json={"email": user_email, "password": "password123"})
+    login_resp = client.post("/auth/login", json={"email": user_email, "password": "PruebaSegura123"})
     token = login_resp.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -530,8 +530,8 @@ def test_consulta_amortizacion_idor_cliente_bloqueado(client: TestClient):
 
     # Iniciar sesión como CLIENTE tercero
     user_email = "tercero@credifresh.com"
-    client.post("/auth/register", json={"email": user_email, "password": "password123"})
-    login_resp = client.post("/auth/login", json={"email": user_email, "password": "password123"})
+    client.post("/auth/register", json={"email": user_email, "password": "PruebaSegura123"})
+    login_resp = client.post("/auth/login", json={"email": user_email, "password": "PruebaSegura123"})
     token = login_resp.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -557,8 +557,8 @@ def test_consulta_pagos_idor_cliente_bloqueado(client: TestClient):
 
     # Iniciar sesión como CLIENTE tercero
     user_email = "tercero2@credifresh.com"
-    client.post("/auth/register", json={"email": user_email, "password": "password123"})
-    login_resp = client.post("/auth/login", json={"email": user_email, "password": "password123"})
+    client.post("/auth/register", json={"email": user_email, "password": "PruebaSegura123"})
+    login_resp = client.post("/auth/login", json={"email": user_email, "password": "PruebaSegura123"})
     token = login_resp.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 

@@ -47,8 +47,35 @@ def test_cors_wildcard_in_production_raises_error(monkeypatch):
 
     importlib.reload(app.core.security)
 
-    with pytest.raises(RuntimeError, match="No se permite utilizar wildcard"):
-        importlib.reload(main)
+    try:
+        with pytest.raises(RuntimeError, match="No se permite utilizar wildcard"):
+            importlib.reload(main)
+    finally:
+        main.app = app_original
+
+
+def test_openapi_docs_disabled_only_in_production(monkeypatch):
+    import importlib
+    import main
+    import app.core.security
+
+    app_original = main.app
+    monkeypatch.setenv("SECRET_KEY", "test-secret-key-123")
+    monkeypatch.setenv("ALLOWED_ORIGINS", "https://example.com")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    try:
+        production_app = importlib.reload(main).app
+        assert production_app.docs_url is None
+        assert production_app.redoc_url is None
+        assert production_app.openapi_url is None
+
+        monkeypatch.setenv("ENVIRONMENT", "simulation")
+        development_app = importlib.reload(main).app
+        assert development_app.docs_url == "/docs"
+        assert development_app.redoc_url == "/redoc"
+        assert development_app.openapi_url == "/openapi.json"
+    finally:
+        main.app = app_original
 
     # Restaurar la aplicación original
     main.app = app_original

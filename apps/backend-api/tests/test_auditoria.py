@@ -52,7 +52,7 @@ def aceptar_condiciones_auditoria(client: TestClient, credito_id: int) -> None:
         db.close()
 
     email = f"cliente_auditoria_{credito_id}@credifresh.com"
-    register = client.post("/auth/register", json={"email": email, "password": "password123"})
+    register = client.post("/auth/register", json={"email": email, "password": "PruebaSegura123"})
     assert register.status_code == 201
     user_id = register.json()["id"]
 
@@ -64,7 +64,7 @@ def aceptar_condiciones_auditoria(client: TestClient, credito_id: int) -> None:
     finally:
         db.close()
 
-    login = client.post("/auth/login", json={"email": email, "password": "password123"})
+    login = client.post("/auth/login", json={"email": email, "password": "PruebaSegura123"})
     assert login.status_code == 200
     headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
 
@@ -193,13 +193,13 @@ def test_consulta_auditoria_exitoso_admin(client: TestClient):
 
 def test_consulta_auditoria_bloqueado_gestor_cliente_sin_auth(client: TestClient):
     """6. Verificar GESTOR (403), CLIENTE (403) y sin token (403)."""
-    client.post("/auth/register", json={"email": "gestoraud@credifresh.com", "password": "password123", "rol": "GESTOR"})
-    login_gestor = client.post("/auth/login", json={"email": "gestoraud@credifresh.com", "password": "password123"})
+    client.post("/auth/register", json={"email": "gestoraud@credifresh.com", "password": "PruebaSegura123", "rol": "GESTOR"})
+    login_gestor = client.post("/auth/login", json={"email": "gestoraud@credifresh.com", "password": "PruebaSegura123"})
     token_gestor = login_gestor.json()["access_token"]
     headers_gestor = {"Authorization": f"Bearer {token_gestor}"}
 
-    client.post("/auth/register", json={"email": "clienteaud@credifresh.com", "password": "password123", "rol": "CLIENTE"})
-    login_cliente = client.post("/auth/login", json={"email": "clienteaud@credifresh.com", "password": "password123"})
+    client.post("/auth/register", json={"email": "clienteaud@credifresh.com", "password": "PruebaSegura123", "rol": "CLIENTE"})
+    login_cliente = client.post("/auth/login", json={"email": "clienteaud@credifresh.com", "password": "PruebaSegura123"})
     token_cliente = login_cliente.json()["access_token"]
     headers_cliente = {"Authorization": f"Bearer {token_cliente}"}
 

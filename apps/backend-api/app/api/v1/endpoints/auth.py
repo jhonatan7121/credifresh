@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, status
 from jose import JWTError, jwt
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -16,6 +16,7 @@ from app.config.database import get_db
 from app.models.usuario import Usuario as UsuarioModel
 from app.core.security import ALGORITHM, SECRET_KEY, get_password_hash, verify_password, create_access_token
 from app.core.deps import get_current_active_user
+from app.core.rate_limit import enforce_rate_limit
 from modules.audit.audit_service import registrar_auditoria
 
 router = APIRouter(
@@ -27,12 +28,13 @@ logger = logging.getLogger(__name__)
 # Esquemas Pydantic
 class UsuarioCreate(BaseModel):
     email: str = Field(..., pattern=r"^[\w\.-]+@[\w\.-]+\.\w+$", description="Email del usuario")
-    password: str = Field(..., min_length=6, description="Contraseña del usuario (mínimo 6 caracteres)")
+    password: str = Field(..., min_length=12, max_length=72, description="Contraseña del usuario (mínimo 12 caracteres)")
     rol: str = Field(default="CLIENTE", description="Rol del usuario")
 
 class UsuarioLogin(BaseModel):
     email: str = Field(..., pattern=r"^[\w\.-]+@[\w\.-]+\.\w+$")
-    password: str = Field(..., min_length=6)
+    # Keep login compatible with accounts created under the older minimum.
+    password: str = Field(..., min_length=1, max_length=72)
 
 
 class BootstrapAdminRequest(BaseModel):
@@ -46,7 +48,7 @@ class PasswordResetRequest(BaseModel):
 
 class PasswordResetComplete(BaseModel):
     token: str = Field(min_length=20)
-    password: str = Field(min_length=8, max_length=72)
+    password: str = Field(min_length=12, max_length=72)
 
 
 def _send_password_reset_email(email: str, reset_url: str) -> None:
@@ -160,9 +162,17 @@ def crear_administrador_inicial(
 @router.post("/password-reset/request", status_code=202)
 def solicitar_restablecimiento_contrasena(
     request: PasswordResetRequest,
+    http_request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
+    enforce_rate_limit(
+        db, http_request, "password-reset-ip", "all", max_requests=20, window_seconds=3600
+    )
+    enforce_rate_limit(
+        db, http_request, "password-reset-email", request.email.strip().casefold(), max_requests=3, window_seconds=3600,
+        include_client_ip=False,
+    )
     smtp_host = os.getenv("SMTP_HOST")
     reset_base_url = os.getenv("RESET_PASSWORD_URL")
     if not smtp_host or not reset_base_url or not (os.getenv("SMTP_FROM_EMAIL") or os.getenv("SMTP_USERNAME")):
@@ -261,8 +271,16 @@ def registrar_usuario(
 @router.post("/login", response_model=TokenResponse)
 def login_usuario(
     credenciales: UsuarioLogin,
+    request: Request,
     db: Session = Depends(get_db)
 ):
+    enforce_rate_limit(
+        db, request, "login-ip", "all", max_requests=50, window_seconds=900
+    )
+    enforce_rate_limit(
+        db, request, "login-email", credenciales.email.strip().casefold(), max_requests=10, window_seconds=900,
+        include_client_ip=False,
+    )
     # Buscar usuario
     usuario = (
         db.query(UsuarioModel)

@@ -16,7 +16,16 @@ def upgrade() -> None:
     op.add_column("clientes", sa.Column("direccion", sa.String(length=240), nullable=True))
     op.add_column("usuarios", sa.Column("password_reset_issued_at", sa.DateTime(timezone=True), nullable=True))
     op.add_column("usuarios", sa.Column("auth_token_version", sa.Integer(), nullable=False, server_default="1"))
-    op.alter_column("usuarios", "auth_token_version", server_default=None)
+    if op.get_bind().dialect.name == "sqlite":
+        # SQLite requires a table rebuild to change a column default.
+        with op.batch_alter_table("usuarios") as batch_op:
+            batch_op.alter_column(
+                "auth_token_version",
+                existing_type=sa.Integer(),
+                server_default=None,
+            )
+    else:
+        op.alter_column("usuarios", "auth_token_version", server_default=None)
 
 
 def downgrade() -> None:

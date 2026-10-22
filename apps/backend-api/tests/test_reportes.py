@@ -55,7 +55,7 @@ def test_bloqueo_reportes_cliente(client: TestClient):
         "/auth/register",
         json={
             "email": email_cliente,
-            "password": "password123",
+            "password": "PruebaSegura123",
             "rol": "CLIENTE",
         },
     )
@@ -64,7 +64,7 @@ def test_bloqueo_reportes_cliente(client: TestClient):
         "/auth/login",
         json={
             "email": email_cliente,
-            "password": "password123",
+            "password": "PruebaSegura123",
         },
     )
 

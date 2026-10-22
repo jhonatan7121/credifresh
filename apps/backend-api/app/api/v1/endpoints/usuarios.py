@@ -22,7 +22,7 @@ RolGestionable = Literal["ADMIN", "GESTOR", "CLIENTE"]
 
 class UsuarioGestionCreate(BaseModel):
     email: str = Field(..., pattern=r"^[\w\.-]+@[\w\.-]+\.\w+$", description="Email del usuario")
-    password: str = Field(..., min_length=6, description="Contraseña del usuario (mínimo 6 caracteres)")
+    password: str = Field(..., min_length=12, max_length=72, description="Contraseña del usuario (mínimo 12 caracteres)")
     rol: RolGestionable = Field(..., description="Rol a asignar: ADMIN, GESTOR o CLIENTE")
 
 

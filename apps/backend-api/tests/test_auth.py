@@ -1,17 +1,18 @@
 import pytest
+from uuid import uuid4
 from fastapi.testclient import TestClient
 from jose import jwt
 
-from app.core.security import SECRET_KEY, ALGORITHM
+from app.core.security import SECRET_KEY, ALGORITHM, get_password_hash
 from app.models.usuario import Usuario
-from tests.conftest import TestSessionLocal
+from conftest import TestSessionLocal
 
 
 def test_registro_usuario_exitoso(client: TestClient):
     """Prueba de registro exitoso de usuario."""
     datos_registro = {
         "email": "nuevo_usuario@credifresh.com",
-        "password": "password123",
+        "password": "PruebaSegura123",
         "rol": "CLIENTE"
     }
     response = client.post("/auth/register", json=datos_registro)
@@ -32,7 +33,7 @@ def test_registro_email_duplicado(client: TestClient):
     email = "duplicado@credifresh.com"
     datos_registro1 = {
         "email": email,
-        "password": "password123",
+        "password": "PruebaSegura123",
         "rol": "CLIENTE"
     }
     # Primer registro
@@ -42,7 +43,7 @@ def test_registro_email_duplicado(client: TestClient):
     # Segundo registro con el mismo email
     datos_registro2 = {
         "email": email,
-        "password": "password456",
+        "password": "PruebaSegura456",
         "rol": "CLIENTE"
     }
     response2 = client.post("/auth/register", json=datos_registro2)
@@ -55,13 +56,13 @@ def test_registro_datos_invalidos(client: TestClient):
     # Email inválido
     datos_email_invalido = {
         "email": "correo_invalido",
-        "password": "password123",
+        "password": "PruebaSegura123",
         "rol": "CLIENTE"
     }
     response = client.post("/auth/register", json=datos_email_invalido)
     assert response.status_code == 422
 
-    # Contraseña corta (menos de 6 caracteres)
+    # Contraseña corta (menos de 12 caracteres)
     datos_clave_corta = {
         "email": "valido@credifresh.com",
         "password": "123",
@@ -74,7 +75,7 @@ def test_registro_datos_invalidos(client: TestClient):
 def test_login_exitoso_y_jwt_valido(client: TestClient):
     """Prueba de login exitoso y verificación de generación válida del JWT."""
     email = "login_exitoso@credifresh.com"
-    password = "password123"
+    password = "PruebaSegura123"
     
     # Primero registrar el usuario
     datos_registro = {
@@ -108,7 +109,7 @@ def test_login_exitoso_y_jwt_valido(client: TestClient):
 def test_login_contrasena_incorrecta(client: TestClient):
     """Prueba de login con contraseña incorrecta devuelve HTTP 401."""
     email = "error_clave@credifresh.com"
-    password = "password123"
+    password = "PruebaSegura123"
     
     # Registrar el usuario
     datos_registro = {
@@ -132,7 +133,7 @@ def test_login_usuario_inexistente(client: TestClient):
     """Prueba de login con usuario inexistente devuelve HTTP 401."""
     datos_login = {
         "email": "inexistente@credifresh.com",
-        "password": "password123"
+        "password": "PruebaSegura123"
     }
     response = client.post("/auth/login", json=datos_login)
     assert response.status_code == 401
@@ -142,7 +143,7 @@ def test_login_usuario_inexistente(client: TestClient):
 def test_login_usuario_inactivo(client: TestClient):
     """Prueba de login con usuario inactivo."""
     email = "inactivo@credifresh.com"
-    password = "password123"
+    password = "PruebaSegura123"
     
     # Registrar el usuario
     datos_registro = {
@@ -180,3 +181,50 @@ def test_login_usuario_inactivo(client: TestClient):
     # Debe devolver un error controlado (por ejemplo, 400 Bad Request)
     assert response.status_code == 400
     assert response.json()["detail"] == "El usuario está inactivo"
+
+
+def test_login_aplica_limite_por_cuenta(client: TestClient):
+    email = f"limite-{uuid4().hex}@credifresh.test"
+    payload = {"email": email, "password": "clave-fallida"}
+    for _ in range(10):
+        assert client.post("/auth/login", json=payload).status_code == 401
+
+    response = client.post("/auth/login", json=payload)
+    assert response.status_code == 429
+    assert int(response.headers["Retry-After"]) > 0
+
+
+def test_registro_exige_12_caracteres(client: TestClient):
+    response = client.post(
+        "/auth/register",
+        json={"email": f"password-corta-{uuid4().hex}@credifresh.test", "password": "12345678901"},
+    )
+    assert response.status_code == 422
+
+
+def test_login_mantiene_compatibilidad_con_cuenta_existente(client: TestClient):
+    email = f"cuenta-anterior-{uuid4().hex}@credifresh.test"
+    password = "oldpwd"
+    db = TestSessionLocal()
+    try:
+        db.add(Usuario(email=email, password_hash=get_password_hash(password), rol="CLIENTE", activo=True))
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post("/auth/login", json={"email": email, "password": password})
+    assert response.status_code == 200
+
+
+def test_password_reset_limita_solicitudes_sin_enviar_correo(client: TestClient, monkeypatch):
+    for name in ("SMTP_HOST", "SMTP_FROM_EMAIL", "SMTP_USERNAME", "SMTP_PASSWORD", "RESET_PASSWORD_URL"):
+        monkeypatch.delenv(name, raising=False)
+    email = f"reset-limite-{uuid4().hex}@credifresh.test"
+
+    for _ in range(3):
+        response = client.post("/auth/password-reset/request", json={"email": email})
+        assert response.status_code == 503
+
+    response = client.post("/auth/password-reset/request", json={"email": email})
+    assert response.status_code == 429
+    assert int(response.headers["Retry-After"]) > 0

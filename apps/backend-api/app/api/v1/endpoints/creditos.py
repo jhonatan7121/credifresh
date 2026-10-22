@@ -32,6 +32,7 @@ router = APIRouter(
 
 COLOMBIA_TZ = datetime.timezone(datetime.timedelta(hours=-5))
 BANK_OPERATIONS_ENABLED = os.getenv("BANK_OPERATIONS_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+SIMULATION_MODE = os.getenv("SIMULATION_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def require_bank_operations_enabled(
@@ -40,7 +41,7 @@ def require_bank_operations_enabled(
     accion: str,
     credito_id: int,
 ):
-    if not BANK_OPERATIONS_ENABLED:
+    if not (BANK_OPERATIONS_ENABLED or SIMULATION_MODE):
         registrar_auditoria(
             db=db,
             usuario=current_user,
@@ -218,7 +219,11 @@ def obtener_estado_operaciones(
     current_user: Usuario = Depends(RoleChecker(["ADMIN"])),
 ):
     """Informa si el bloqueo de desembolsos y pagos está activo en esta API."""
-    return {"operaciones_bancarias_habilitadas": BANK_OPERATIONS_ENABLED}
+    return {
+        "operaciones_bancarias_habilitadas": BANK_OPERATIONS_ENABLED,
+        "modo_simulacion": SIMULATION_MODE,
+        "mensaje": "No se mueve dinero real." if SIMULATION_MODE else None,
+    }
 
 
 @router.get("/pendientes-desembolso", response_model=List[PendienteDesembolsoResponse])

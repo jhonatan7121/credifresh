@@ -87,7 +87,8 @@ def clean_db(test_engine):
     """Limpia solo tablas de prueba después de comprobar la base conectada."""
     statement = text(
         "TRUNCATE TABLE pagos, cuotas_amortizacion, notificaciones, evaluaciones, "
-        "creditos, perfiles_financieros, clientes, audit_logs, usuarios RESTART IDENTITY CASCADE"
+        "creditos, perfiles_financieros, clientes, audit_logs, usuarios, "
+        "auth_rate_limit_windows RESTART IDENTITY CASCADE"
     )
     with test_engine.begin() as connection:
         _assert_test_database(connection)

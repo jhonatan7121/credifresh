@@ -24,7 +24,7 @@ def aceptar_condiciones_como_cliente(client, cliente_id, credito_id):
     user_email = f"cliente_desembolso_{credito_id}@credifresh.com"
     reg_resp = client.post("/auth/register", json={
         "email": user_email,
-        "password": "password123"
+        "password": "PruebaSegura123"
     })
     assert reg_resp.status_code == 201
     user_id = reg_resp.json()["id"]
@@ -39,7 +39,7 @@ def aceptar_condiciones_como_cliente(client, cliente_id, credito_id):
 
     login_resp = client.post("/auth/login", json={
         "email": user_email,
-        "password": "password123"
+        "password": "PruebaSegura123"
     })
     assert login_resp.status_code == 200
     cliente_headers = {"Authorization": f"Bearer {login_resp.json()['access_token']}"}
@@ -321,12 +321,12 @@ def test_cliente_no_puede_desembolsar(client: TestClient):
     user_email = "cliente_desem@credifresh.com"
     client.post("/auth/register", json={
         "email": user_email,
-        "password": "password123"
+        "password": "PruebaSegura123"
     })
     # Login para obtener JWT
     login_resp = client.post("/auth/login", json={
         "email": user_email,
-        "password": "password123"
+        "password": "PruebaSegura123"
     })
     assert login_resp.status_code == 200
     token = login_resp.json()["access_token"]

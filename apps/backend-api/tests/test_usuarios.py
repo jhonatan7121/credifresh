@@ -87,8 +87,8 @@ def auth_headers(token: str) -> dict:
 
 
 def admin_token(client: TestClient) -> str:
-    ensure_user("admin_h1@credifresh.com", "password123", "ADMIN")
-    return login(client, "admin_h1@credifresh.com", "password123")
+    ensure_user("admin_h1@credifresh.com", "PruebaSegura123", "ADMIN")
+    return login(client, "admin_h1@credifresh.com", "PruebaSegura123")
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +100,7 @@ def test_admin_puede_crear_gestor(client: TestClient):
     token = admin_token(client)
     response = client.post("/usuarios/", json={
         "email": "gestor_nuevo_h1@credifresh.com",
-        "password": "password123",
+        "password": "PruebaSegura123",
         "rol": "GESTOR",
     }, headers=auth_headers(token))
     assert response.status_code == 201
@@ -114,7 +114,7 @@ def test_admin_puede_crear_admin(client: TestClient):
     token = admin_token(client)
     response = client.post("/usuarios/", json={
         "email": "admin_nuevo_h1@credifresh.com",
-        "password": "password123",
+        "password": "PruebaSegura123",
         "rol": "ADMIN",
     }, headers=auth_headers(token))
     assert response.status_code == 201
@@ -129,11 +129,11 @@ def test_admin_puede_crear_admin(client: TestClient):
 
 def test_gestor_no_puede_crear_usuario(client: TestClient):
     """3. Un GESTOR recibe 403 al crear usuarios."""
-    ensure_user("gestor_bloqueo_h1@credifresh.com", "password123", "GESTOR")
-    token = login(client, "gestor_bloqueo_h1@credifresh.com", "password123")
+    ensure_user("gestor_bloqueo_h1@credifresh.com", "PruebaSegura123", "GESTOR")
+    token = login(client, "gestor_bloqueo_h1@credifresh.com", "PruebaSegura123")
     response = client.post("/usuarios/", json={
         "email": "intento_gestor_h1@credifresh.com",
-        "password": "password123",
+        "password": "PruebaSegura123",
         "rol": "GESTOR",
     }, headers=auth_headers(token))
     assert response.status_code == 403
@@ -141,9 +141,9 @@ def test_gestor_no_puede_crear_usuario(client: TestClient):
 
 def test_gestor_no_puede_promover_a_admin(client: TestClient):
     """4. Un GESTOR recibe 403 al promover a otro usuario a ADMIN."""
-    objetivo = ensure_user("objetivo_promocion_h1@credifresh.com", "password123", "CLIENTE")
-    ensure_user("gestor_promocion_h1@credifresh.com", "password123", "GESTOR")
-    token = login(client, "gestor_promocion_h1@credifresh.com", "password123")
+    objetivo = ensure_user("objetivo_promocion_h1@credifresh.com", "PruebaSegura123", "CLIENTE")
+    ensure_user("gestor_promocion_h1@credifresh.com", "PruebaSegura123", "GESTOR")
+    token = login(client, "gestor_promocion_h1@credifresh.com", "PruebaSegura123")
     response = client.patch(f"/usuarios/{objetivo.id}/rol", json={
         "rol": "ADMIN",
     }, headers=auth_headers(token))
@@ -161,14 +161,14 @@ def test_gestor_no_puede_promover_a_admin(client: TestClient):
 
 def test_cliente_no_puede_crear_ni_promover(client: TestClient):
     """5. Un CLIENTE recibe 403 en POST y PATCH de gestión de usuarios."""
-    objetivo = ensure_user("objetivo_cliente_h1@credifresh.com", "password123", "CLIENTE")
-    ensure_user("cliente_bloqueo_h1@credifresh.com", "password123", "CLIENTE")
-    token = login(client, "cliente_bloqueo_h1@credifresh.com", "password123")
+    objetivo = ensure_user("objetivo_cliente_h1@credifresh.com", "PruebaSegura123", "CLIENTE")
+    ensure_user("cliente_bloqueo_h1@credifresh.com", "PruebaSegura123", "CLIENTE")
+    token = login(client, "cliente_bloqueo_h1@credifresh.com", "PruebaSegura123")
     headers = auth_headers(token)
 
     response_post = client.post("/usuarios/", json={
         "email": "intento_cliente_h1@credifresh.com",
-        "password": "password123",
+        "password": "PruebaSegura123",
         "rol": "GESTOR",
     }, headers=headers)
     assert response_post.status_code == 403
@@ -187,7 +187,7 @@ def test_sin_token_recibe_403(client: TestClient):
     """6. Los endpoints de gestión exigen autenticación (403 sin token)."""
     response_post = client.post("/usuarios/", json={
         "email": "sin_token_h1@credifresh.com",
-        "password": "password123",
+        "password": "PruebaSegura123",
         "rol": "GESTOR",
     })
     assert response_post.status_code == 403
@@ -202,8 +202,8 @@ def test_sin_token_recibe_403(client: TestClient):
 
 def test_usuario_no_puede_elevar_su_propio_rol(client: TestClient):
     """7. Un GESTOR intenta promoverse a sí mismo y recibe 403."""
-    gestor = ensure_user("gestor_self_h1@credifresh.com", "password123", "GESTOR")
-    token = login(client, "gestor_self_h1@credifresh.com", "password123")
+    gestor = ensure_user("gestor_self_h1@credifresh.com", "PruebaSegura123", "GESTOR")
+    token = login(client, "gestor_self_h1@credifresh.com", "PruebaSegura123")
     response = client.patch(f"/usuarios/{gestor.id}/rol", json={
         "rol": "ADMIN",
     }, headers=auth_headers(token))
@@ -222,7 +222,7 @@ def test_register_sigue_creando_clientes(client: TestClient):
     """8. /auth/register acepta el campo rol en el body pero SIEMPRE crea CLIENTE."""
     response = client.post("/auth/register", json={
         "email": "registro_h1@credifresh.com",
-        "password": "password123",
+        "password": "PruebaSegura123",
         "rol": "ADMIN",
     })
     assert response.status_code == 201
@@ -249,7 +249,7 @@ def test_passwords_nunca_en_texto_plano(client: TestClient):
     token = admin_token(client)
     response = client.post("/usuarios/", json={
         "email": "hash_check_h1@credifresh.com",
-        "password": "password123",
+        "password": "PruebaSegura123",
         "rol": "GESTOR",
     }, headers=auth_headers(token))
     assert response.status_code == 201
@@ -265,10 +265,10 @@ def test_passwords_nunca_en_texto_plano(client: TestClient):
         .first()
     )
     assert usuario_bd is not None
-    assert usuario_bd.password_hash != "password123"
+    assert usuario_bd.password_hash != "PruebaSegura123"
     assert usuario_bd.password_hash.startswith("$2")
-    assert "password123" not in usuario_bd.password_hash
-    assert verify_password("password123", usuario_bd.password_hash) is True
+    assert "PruebaSegura123" not in usuario_bd.password_hash
+    assert verify_password("PruebaSegura123", usuario_bd.password_hash) is True
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +280,7 @@ def test_rol_invalido_rechazado(client: TestClient):
     token = admin_token(client)
     response = client.post("/usuarios/", json={
         "email": "rol_invalido_h1@credifresh.com",
-        "password": "password123",
+        "password": "PruebaSegura123",
         "rol": "SUPERUSER",
     }, headers=auth_headers(token))
     assert response.status_code == 422
@@ -295,7 +295,7 @@ def test_email_duplicado_conflict(client: TestClient):
     token = admin_token(client)
     payload = {
         "email": "duplicado_h1@credifresh.com",
-        "password": "password123",
+        "password": "PruebaSegura123",
         "rol": "GESTOR",
     }
     response_primera = client.post("/usuarios/", json=payload, headers=auth_headers(token))
@@ -311,14 +311,14 @@ def test_email_duplicado_conflict(client: TestClient):
 
 def test_listado_usuarios_solo_admin(client: TestClient):
     """12. GET /usuarios/ exige ADMIN: 403 para GESTOR/CLIENTE y sin token."""
-    ensure_user("gestor_listado_h2@credifresh.com", "password123", "GESTOR")
-    ensure_user("cliente_listado_h2@credifresh.com", "password123", "CLIENTE")
+    ensure_user("gestor_listado_h2@credifresh.com", "PruebaSegura123", "GESTOR")
+    ensure_user("cliente_listado_h2@credifresh.com", "PruebaSegura123", "CLIENTE")
 
-    token_gestor = login(client, "gestor_listado_h2@credifresh.com", "password123")
+    token_gestor = login(client, "gestor_listado_h2@credifresh.com", "PruebaSegura123")
     response_gestor = client.get("/usuarios/", headers=auth_headers(token_gestor))
     assert response_gestor.status_code == 403
 
-    token_cliente = login(client, "cliente_listado_h2@credifresh.com", "password123")
+    token_cliente = login(client, "cliente_listado_h2@credifresh.com", "PruebaSegura123")
     response_cliente = client.get("/usuarios/", headers=auth_headers(token_cliente))
     assert response_cliente.status_code == 403
 
@@ -349,8 +349,8 @@ def test_listado_no_expone_hashes(client: TestClient):
 def test_listado_filtros_rol_y_activo(client: TestClient):
     """14. Los filtros acotan el listado; un rol fuera de la whitelist da 422."""
     token = admin_token(client)
-    ensure_user("gestor_filtro_h2@credifresh.com", "password123", "GESTOR")
-    ensure_user("cliente_filtro_h2@credifresh.com", "password123", "CLIENTE")
+    ensure_user("gestor_filtro_h2@credifresh.com", "PruebaSegura123", "GESTOR")
+    ensure_user("cliente_filtro_h2@credifresh.com", "PruebaSegura123", "CLIENTE")
 
     response_rol = client.get("/usuarios/?rol=GESTOR", headers=auth_headers(token))
     assert response_rol.status_code == 200
@@ -389,7 +389,7 @@ def test_listado_filtros_rol_y_activo(client: TestClient):
 def test_detalle_usuario(client: TestClient):
     """15. Detalle por id: 200 con datos saneados o 404 si no existe."""
     token = admin_token(client)
-    objetivo = ensure_user("detalle_h2@credifresh.com", "password123", "CLIENTE")
+    objetivo = ensure_user("detalle_h2@credifresh.com", "PruebaSegura123", "CLIENTE")
 
     response = client.get(f"/usuarios/{objetivo.id}", headers=auth_headers(token))
     assert response.status_code == 200
@@ -411,8 +411,8 @@ def test_detalle_usuario(client: TestClient):
 def test_desactivar_usuario_bloquea_acceso(client: TestClient):
     """16. Tras la baja: el token previo da 400 y el login también."""
     token_admin = admin_token(client)
-    ensure_user("baja_h2@credifresh.com", "password123", "GESTOR")
-    token_baja = login(client, "baja_h2@credifresh.com", "password123")
+    ensure_user("baja_h2@credifresh.com", "PruebaSegura123", "GESTOR")
+    token_baja = login(client, "baja_h2@credifresh.com", "PruebaSegura123")
 
     db = get_test_db()
     usuario_id = (
@@ -437,7 +437,7 @@ def test_desactivar_usuario_bloquea_acceso(client: TestClient):
     # El login directo también queda bloqueado
     response_login = client.post(
         "/auth/login",
-        json={"email": "baja_h2@credifresh.com", "password": "password123"},
+        json={"email": "baja_h2@credifresh.com", "password": "PruebaSegura123"},
     )
     assert response_login.status_code == 400
     assert response_login.json()["detail"] == "El usuario está inactivo"
@@ -450,7 +450,7 @@ def test_desactivar_usuario_bloquea_acceso(client: TestClient):
 def test_reactivar_usuario_restaura_acceso(client: TestClient):
     """17. Tras reactivar, el login vuelve a responder 200 con token."""
     token_admin = admin_token(client)
-    ensure_user("reactiva_h2@credifresh.com", "password123", "GESTOR")
+    ensure_user("reactiva_h2@credifresh.com", "PruebaSegura123", "GESTOR")
 
     db = get_test_db()
     usuario_id = (
@@ -476,7 +476,7 @@ def test_reactivar_usuario_restaura_acceso(client: TestClient):
     assert response_alta.status_code == 200
     assert response_alta.json()["activo"] is True
 
-    token = login(client, "reactiva_h2@credifresh.com", "password123")
+    token = login(client, "reactiva_h2@credifresh.com", "PruebaSegura123")
     assert isinstance(token, str) and len(token) > 0
 
 
@@ -487,7 +487,7 @@ def test_reactivar_usuario_restaura_acceso(client: TestClient):
 def test_desactivacion_es_logica(client: TestClient):
     """18. Tras la baja el usuario sigue en BD con su hash intacto."""
     token_admin = admin_token(client)
-    ensure_user("logica_h2@credifresh.com", "password123", "CLIENTE")
+    ensure_user("logica_h2@credifresh.com", "PruebaSegura123", "CLIENTE")
 
     db = get_test_db()
     usuario_id = (
@@ -514,8 +514,8 @@ def test_desactivacion_es_logica(client: TestClient):
     )
     assert usuario_bd is not None
     assert usuario_bd.activo is False
-    assert usuario_bd.password_hash != "password123"
-    assert verify_password("password123", usuario_bd.password_hash) is True
+    assert usuario_bd.password_hash != "PruebaSegura123"
+    assert verify_password("PruebaSegura123", usuario_bd.password_hash) is True
 
 
 # ---------------------------------------------------------------------------
@@ -525,7 +525,7 @@ def test_desactivacion_es_logica(client: TestClient):
 def test_admin_no_puede_desactivarse_a_si_mismo(client: TestClient):
     """19. 409 si el ADMIN aplica la baja sobre su propia cuenta."""
     token = admin_token(client)  # admin_h1@credifresh.com
-    ensure_user("admin_companero_h2@credifresh.com", "password123", "ADMIN")
+    ensure_user("admin_companero_h2@credifresh.com", "PruebaSegura123", "ADMIN")
 
     db = get_test_db()
     admin_propio = (
@@ -553,7 +553,7 @@ def test_admin_no_puede_desactivarse_a_si_mismo(client: TestClient):
 def test_no_se_puede_desactivar_ultimo_admin(client: TestClient):
     """20. 409 al bajar al único ADMIN activo; sí se permite bajar a otro ADMIN."""
     token = admin_token(client)  # admin_h1@credifresh.com
-    otro_admin = ensure_user("admin_ultimo_h2@credifresh.com", "password123", "ADMIN")
+    otro_admin = ensure_user("admin_ultimo_h2@credifresh.com", "PruebaSegura123", "ADMIN")
 
     # Bajar a otro ADMIN está permitido mientras el solicitante siga activo
     response_otro = client.patch(

@@ -15,6 +15,7 @@ os.environ["BANK_OPERATIONS_ENABLED"] = "true"
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy import delete
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker
 from fastapi import Depends
@@ -35,6 +36,7 @@ from app.models.notificacion import Notificacion
 from app.models.usuario import Usuario
 
 from app.core.deps import get_current_user, get_current_active_user
+from app.core.rate_limit import auth_rate_limit_windows
 from app.core.security import get_password_hash
 
 
@@ -103,7 +105,7 @@ def client() -> TestClient:
         if not bypass_user:
             bypass_user = Usuario(
                 email="bypass_admin@credifresh.com",
-                password_hash=get_password_hash("password123"),
+                password_hash=get_password_hash("PruebaSegura123"),
                 rol="ADMIN",
                 activo=True,
             )
@@ -143,9 +145,17 @@ def isolate_dependency_overrides(client):
     """Prevent one test from contaminating dependency overrides of another."""
 
     original_overrides = app.dependency_overrides.copy()
+    db = TestSessionLocal()
+    db.execute(delete(auth_rate_limit_windows))
+    db.commit()
+    db.close()
 
     try:
         yield
     finally:
+        db = TestSessionLocal()
+        db.execute(delete(auth_rate_limit_windows))
+        db.commit()
+        db.close()
         app.dependency_overrides.clear()
         app.dependency_overrides.update(original_overrides)

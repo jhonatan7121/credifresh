@@ -14,6 +14,7 @@ from pathlib import Path
 BACKEND_DIRECTORY = Path(__file__).resolve().parents[1]
 EXPECTED_TABLES = {
     "alembic_version",
+    "auth_rate_limit_windows",
     "audit_logs",
     "aceptaciones_credito",
     "clientes",
@@ -24,6 +25,7 @@ EXPECTED_TABLES = {
     "pagos",
     "perfiles_financieros",
     "usuarios",
+    "wompi_pagos",
 }
 
 

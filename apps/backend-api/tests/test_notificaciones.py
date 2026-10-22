@@ -20,7 +20,7 @@ def generar_datos_cliente_notif():
 def registrar_usuario_y_cliente(client: TestClient, email: str, rol: str = "CLIENTE"):
     reg_resp = client.post("/auth/register", json={
         "email": email,
-        "password": "password123",
+        "password": "PruebaSegura123",
         "rol": rol
     })
     assert reg_resp.status_code == 201
@@ -28,7 +28,7 @@ def registrar_usuario_y_cliente(client: TestClient, email: str, rol: str = "CLIE
 
     login_resp = client.post("/auth/login", json={
         "email": email,
-        "password": "password123"
+        "password": "PruebaSegura123"
     })
     assert login_resp.status_code == 200
     token = login_resp.json()["access_token"]

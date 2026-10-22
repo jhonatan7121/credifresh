@@ -42,7 +42,7 @@ def get_token(client: TestClient, email: str, password: str) -> str:
 
 def test_registro_no_permite_escalar_a_admin(client: TestClient):
     response = client.post("/auth/register", json={
-        "email": "intento_admin@credifresh.com", "password": "password123", "rol": "ADMIN"
+        "email": "intento_admin@credifresh.com", "password": "PruebaSegura123", "rol": "ADMIN"
     })
     assert response.status_code == 201
     data = response.json()
@@ -52,7 +52,7 @@ def test_registro_no_permite_escalar_a_admin(client: TestClient):
 
 def test_registro_no_permite_escalar_a_gestor(client: TestClient):
     response = client.post("/auth/register", json={
-        "email": "intento_gestor@credifresh.com", "password": "password123", "rol": "GESTOR"
+        "email": "intento_gestor@credifresh.com", "password": "PruebaSegura123", "rol": "GESTOR"
     })
     assert response.status_code == 201
     assert response.json()["rol"] == "CLIENTE"
@@ -68,10 +68,10 @@ def test_endpoints_protegidos_sin_jwt(client: TestClient):
 def test_cliente_no_puede_listar_clientes(client: TestClient):
     db = get_test_db()
     try:
-        user = create_test_user(db, "cliente_listar@credifresh.com", "password123", "CLIENTE")
+        user = create_test_user(db, "cliente_listar@credifresh.com", "PruebaSegura123", "CLIENTE")
     finally:
         db.close()
-    token = get_token(client, "cliente_listar@credifresh.com", "password123")
+    token = get_token(client, "cliente_listar@credifresh.com", "PruebaSegura123")
     headers = {"Authorization": f"Bearer {token}"}
     response = client.get("/clientes/", headers=headers)
     assert response.status_code == 403
@@ -79,10 +79,10 @@ def test_cliente_no_puede_listar_clientes(client: TestClient):
 def test_cliente_no_puede_cambiar_estado_o_evaluar_credito(client: TestClient):
     db = get_test_db()
     try:
-        user = create_test_user(db, "cliente_creditos@credifresh.com", "password123", "CLIENTE")
+        user = create_test_user(db, "cliente_creditos@credifresh.com", "PruebaSegura123", "CLIENTE")
     finally:
         db.close()
-    token = get_token(client, "cliente_creditos@credifresh.com", "password123")
+    token = get_token(client, "cliente_creditos@credifresh.com", "PruebaSegura123")
     headers = {"Authorization": f"Bearer {token}"}
     assert client.patch("/creditos/1/estado", json={"estado": "APROBADO"}, headers=headers).status_code == 403
     assert client.post("/creditos/1/evaluar", headers=headers).status_code == 403
@@ -90,12 +90,12 @@ def test_cliente_no_puede_cambiar_estado_o_evaluar_credito(client: TestClient):
 def test_cliente_acceso_recursos_propios_vs_ajenos(client: TestClient):
     db = get_test_db()
     try:
-        user1 = create_test_user(db, "cliente1@credifresh.com", "password123", "CLIENTE")
+        user1 = create_test_user(db, "cliente1@credifresh.com", "PruebaSegura123", "CLIENTE")
         c1 = Cliente(nombre="Cliente Uno", cedula="11111199", telefono="3000000001", usuario_id=user1.id)
         db.add(c1)
         db.commit()
         db.refresh(c1)
-        user2 = create_test_user(db, "cliente2@credifresh.com", "password123", "CLIENTE")
+        user2 = create_test_user(db, "cliente2@credifresh.com", "PruebaSegura123", "CLIENTE")
         c2 = Cliente(nombre="Cliente Dos", cedula="22222299", telefono="3000000002", usuario_id=user2.id)
         db.add(c2)
         db.commit()
@@ -104,7 +104,7 @@ def test_cliente_acceso_recursos_propios_vs_ajenos(client: TestClient):
         c2_id = c2.id
     finally:
         db.close()
-    token1 = get_token(client, "cliente1@credifresh.com", "password123")
+    token1 = get_token(client, "cliente1@credifresh.com", "PruebaSegura123")
     headers1 = {"Authorization": f"Bearer {token1}"}
     resp_propio = client.get(f"/clientes/{c1_id}", headers=headers1)
     assert resp_propio.status_code == 200
@@ -116,10 +116,10 @@ def test_cliente_acceso_recursos_propios_vs_ajenos(client: TestClient):
 def test_gestor_permisos_y_restricciones(client: TestClient):
     db = get_test_db()
     try:
-        gestor = create_test_user(db, "gestor@credifresh.com", "password123", "GESTOR")
+        gestor = create_test_user(db, "gestor@credifresh.com", "PruebaSegura123", "GESTOR")
     finally:
         db.close()
-    token = get_token(client, "gestor@credifresh.com", "password123")
+    token = get_token(client, "gestor@credifresh.com", "PruebaSegura123")
     headers = {"Authorization": f"Bearer {token}"}
     resp_list = client.get("/clientes/", headers=headers)
     assert resp_list.status_code == 200
@@ -134,12 +134,12 @@ def test_gestor_permisos_y_restricciones(client: TestClient):
 def test_admin_permisos(client: TestClient):
     db = get_test_db()
     try:
-        admin = create_test_user(db, "admin@credifresh.com", "password123", "ADMIN")
+        admin = create_test_user(db, "admin@credifresh.com", "PruebaSegura123", "ADMIN")
     finally:
         db.close()
-    token = get_token(client, "admin@credifresh.com", "password123")
+    token = get_token(client, "admin@credifresh.com", "PruebaSegura123")
     headers = {"Authorization": f"Bearer {token}"}
-    token_gestor = get_token(client, "gestor@credifresh.com", "password123")
+    token_gestor = get_token(client, "gestor@credifresh.com", "PruebaSegura123")
     headers_gestor = {"Authorization": f"Bearer {token_gestor}"}
     resp_create = client.post("/clientes/", json={
         "nombre": "Cliente Admin Borrar", "cedula": "888888", "telefono": "3008888888"

@@ -12,6 +12,7 @@ from app.api.v1.endpoints.reportes import router as reportes_router
 from app.api.v1.endpoints.auditoria import router as auditoria_router
 from app.api.v1.endpoints.notificaciones import router as notificaciones_router
 from app.api.v1.endpoints.usuarios import router as usuarios_router
+from app.api.v1.endpoints.wompi import router as wompi_router
 
 from app.api.v1.endpoints.simulador import router as simulador_router
 
@@ -19,10 +20,15 @@ from app.api.v1.endpoints.simulador import router as simulador_router
 from app.config.database import engine
 from modules.audit.audit_context import reset_audit_request_ip, set_audit_request_ip
 
+is_production = os.getenv("ENVIRONMENT", "").strip().lower() == "production"
+
 app = FastAPI(
     title="CrediFresh API",
     version="1.0.0",
-    description="Backend oficial de CrediFresh"
+    description="Backend oficial de CrediFresh",
+    docs_url=None if is_production else "/docs",
+    redoc_url=None if is_production else "/redoc",
+    openapi_url=None if is_production else "/openapi.json",
 )
 
 allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
@@ -32,7 +38,7 @@ allowed_origins = [
     if origin.strip()
 ]
 
-if os.getenv("ENVIRONMENT") == "production" and "*" in allowed_origins:
+if is_production and "*" in allowed_origins:
     raise RuntimeError("No se permite utilizar wildcard (*) en ALLOWED_ORIGINS en entorno de producción.")
 
 
@@ -67,6 +73,7 @@ app.include_router(notificaciones_router)
 
 app.include_router(auditoria_router)
 app.include_router(usuarios_router)
+app.include_router(wompi_router)
 
 @app.get("/")
 def home():
@@ -89,5 +96,6 @@ def health():
         )
 
     return {
-        "status": "healthy"
+        "status": "healthy",
+        "modo_simulacion": os.getenv("SIMULATION_MODE", "false").strip().lower() in {"1", "true", "yes", "on"},
     }
