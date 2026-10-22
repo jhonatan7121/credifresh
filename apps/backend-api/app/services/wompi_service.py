@@ -58,7 +58,12 @@ def crear_link_pago(*, referencia: str, credito_id: int, numero_cuota: int, mont
         with urllib.request.urlopen(request, timeout=15) as response:
             body = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        raise HTTPException(status_code=502, detail="Wompi Sandbox rechazó la creación del link de pago.") from exc
+        # Expose only the upstream HTTP status for sandbox diagnostics; never
+        # include the response body or request headers, which may contain data.
+        raise HTTPException(
+            status_code=502,
+            detail=f"Wompi Sandbox rechazó la creación del link de pago (HTTP {exc.code}).",
+        ) from exc
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=502, detail="No fue posible conectar con Wompi Sandbox.") from exc
 
