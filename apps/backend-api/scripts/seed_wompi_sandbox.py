@@ -8,7 +8,7 @@ from decimal import Decimal
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config.database import SessionLocal
-from app.core.security import get_password_hash
+from app.core.security import get_password_hash, verify_password
 from app.models.amortizacion import CuotaAmortizacion
 from app.models.cliente import Cliente
 from app.models.credito import Credito
@@ -34,8 +34,13 @@ def main() -> None:
         existing = db.query(Usuario).filter(Usuario.email == SEED_EMAIL).first()
         if existing:
             linked_client = db.query(Cliente).filter(Cliente.usuario_id == existing.id).first()
-            if not linked_client or not db.query(Credito).filter(Credito.cliente_id == linked_client.id).first():
+            if not linked_client or not db.query(Credito).filter( Credito.cliente_id == linked_client.id).first():
                 raise SystemExit("Existing sandbox seed is incomplete; refusing to alter records.")
+            # Keep the disposable test user's password aligned with Render's secret after rotation.
+            if not verify_password(password, existing.password_hash):
+                existing.password_hash = get_password_hash(password)
+                existing.auth_token_version += 1
+                db.commit()
             return
 
         user = Usuario(
@@ -85,5 +90,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
