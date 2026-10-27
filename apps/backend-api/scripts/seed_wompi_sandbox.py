@@ -16,6 +16,60 @@ from app.models.usuario import Usuario
 
 
 SEED_EMAIL = "cliente.wompi.test@credifresh.invalid"
+SEED_PHONE = "3000000000"
+SEED_ADDRESS = "Direccion ficticia para pruebas Sandbox"
+
+
+def ensure_sandbox_test_records(db, client: Cliente) -> bool:
+    """Keep the disposable sandbox user ready for repeatable payment tests.
+
+    Render's sandbox uses an ephemeral SQLite file, so each fresh instance must
+    reconstruct a complete synthetic profile and a pending quota for the
+    decline-path test. This is intentionally limited to the seeded test user.
+    """
+    changed = False
+    if not client.telefono or not client.telefono.strip().isdigit() or len(client.telefono.strip()) < 7:
+        client.telefono = SEED_PHONE
+        changed = True
+    if not client.direccion or len(client.direccion.strip()) < 5:
+        client.direccion = SEED_ADDRESS
+        changed = True
+
+    credits = (
+        db.query(Credito)
+        .filter(Credito.cliente_id == client.id)
+        .order_by(Credito.id.asc())
+        .all()
+    )
+    if not credits:
+        raise SystemExit("Existing sandbox seed is incomplete; refusing to alter records.")
+
+    # The first seeded quota is used for the approved-payment path. Keep a
+    # second, independent pending quota for the declined-payment path.
+    if len(credits) < 2:
+        credit = Credito(
+            cliente_id=client.id,
+            monto=Decimal("100000.00"),
+            plazo_meses=1,
+            tasa_interes=Decimal("0.00"),
+            estado="DESEMBOLSADO",
+        )
+        db.add(credit)
+        db.flush()
+        db.add(CuotaAmortizacion(
+            credito_id=credit.id,
+            numero_cuota=1,
+            fecha_vencimiento=datetime.now(timezone.utc) + timedelta(days=30),
+            monto_cuota=Decimal("100000.00"),
+            capital=Decimal("100000.00"),
+            interes=Decimal("0.00"),
+            saldo_remanente=Decimal("0.00"),
+            monto_pagado=Decimal("0.00"),
+            estado="PENDIENTE",
+        ))
+        changed = True
+
+    return changed
 
 
 def main() -> None:
@@ -40,6 +94,11 @@ def main() -> None:
             if not verify_password(password, existing.password_hash):
                 existing.password_hash = get_password_hash(password)
                 existing.auth_token_version += 1
+                changed = True
+            else:
+                changed = False
+            changed = ensure_sandbox_test_records(db, linked_client) or changed
+            if changed:
                 db.commit()
             return
 
@@ -54,7 +113,8 @@ def main() -> None:
         client = Cliente(
             nombre="Cliente de prueba Wompi",
             cedula="SANDBOX-WOMPI-001",
-            telefono="3000000000",
+            telefono=SEED_PHONE,
+            direccion=SEED_ADDRESS,
             email=SEED_EMAIL,
             usuario_id=user.id,
         )
@@ -80,6 +140,7 @@ def main() -> None:
             monto_pagado=Decimal("0.00"),
             estado="PENDIENTE",
         ))
+        ensure_sandbox_test_records(db, client)
         db.commit()
     except Exception:
         db.rollback()
