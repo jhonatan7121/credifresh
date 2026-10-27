@@ -35,7 +35,7 @@ Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base.metadata.create_all(bind=engine)
 
 
-def make_event(secret="test_events_route", status="APPROVED", transaction_id="route-tx-001"):
+def make_event(secret="test_events_route", status="APPROVED", transaction_id="route-tx-001", environment="test"):
     event = {
         "event": "transaction.updated",
         "data": {"transaction": {
@@ -45,7 +45,7 @@ def make_event(secret="test_events_route", status="APPROVED", transaction_id="ro
             "currency": "COP",
             "payment_link_id": "route-link-001",
         }},
-        "environment": "test",
+        "environment": environment,
         "signature": {"properties": [
             "transaction.id", "transaction.status", "transaction.amount_in_cents",
         ]},
@@ -56,7 +56,7 @@ def make_event(secret="test_events_route", status="APPROVED", transaction_id="ro
     return event
 
 
-def call_webhook(event, checksum=None):
+def call_webhook(event, checksum=None, production=False):
     body = json.dumps(event).encode()
     received = False
 
@@ -67,10 +67,12 @@ def call_webhook(event, checksum=None):
         received = True
         return {"type": "http.request", "body": body, "more_body": False}
 
-    request = Request({"type": "http", "method": "POST", "path": "/integraciones/wompi/sandbox/eventos", "headers": [], "query_string": b""}, receive)
+    path = "/integraciones/wompi/production/eventos" if production else "/integraciones/wompi/sandbox/eventos"
+    request = Request({"type": "http", "method": "POST", "path": path, "headers": [], "query_string": b""}, receive)
     db = Session()
     try:
-        coroutine = wompi_endpoint.recibir_evento_sandbox(request, db, checksum)
+        handler = wompi_endpoint.recibir_evento_produccion if production else wompi_endpoint.recibir_evento_sandbox
+        coroutine = handler(request, db, checksum)
         try:
             coroutine.send(None)
         except StopIteration as result:
@@ -194,6 +196,45 @@ def test_estado_de_intento_no_expone_checkout_y_respeta_propiedad():
     assert result["estado_cuota"] == "PENDIENTE"
     assert result["estado_ultimo_intento"] == "PENDIENTE"
     assert "checkout_url" not in result
+
+
+def test_webhook_produccion_aplica_pago_solo_en_runtime_y_ambiente_produccion():
+    os.environ["ENVIRONMENT"] = "production"
+    os.environ["WOMPI_ENVIRONMENT"] = "production"
+    os.environ["WOMPI_PRIVATE_KEY"] = "prv_prod_route"
+    os.environ["WOMPI_EVENTS_SECRET"] = "prod_events_route"
+    os.environ["WOMPI_PRODUCTION_ENABLED"] = "true"
+    event = make_event(
+        secret="prod_events_route",
+        transaction_id="route-tx-prod-001",
+        environment="prod",
+    )
+    result = call_webhook(event, event["signature"]["checksum"], production=True)
+    assert result["estado"] == "PAGADO"
+    db = Session()
+    try:
+        payment = db.query(Pago).one()
+        assert payment.metodo_pago == "WOMPI"
+        assert db.query(CuotaAmortizacion).one().estado == "PAGADA"
+    finally:
+        db.close()
+
+
+def test_webhook_produccion_no_acepta_ruta_en_configuracion_sandbox():
+    event = make_event(
+        secret="prod_events_route",
+        transaction_id="route-tx-prod-002",
+        environment="prod",
+    )
+    with pytest.raises(HTTPException) as exc:
+        call_webhook(event, event["signature"]["checksum"], production=True)
+    assert exc.value.status_code == 404
+    db = Session()
+    try:
+        assert db.query(Pago).count() == 0
+        assert db.query(CuotaAmortizacion).one().monto_pagado == Decimal("0.00")
+    finally:
+        db.close()
 
 
 def test_crear_link_reutiliza_intento_pendiente(monkeypatch):

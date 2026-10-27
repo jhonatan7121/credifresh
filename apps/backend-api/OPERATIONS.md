@@ -117,6 +117,28 @@ Antes de desembolsar, la API vuelve a comparar monto, plazo, tasa, cuota y total
 del plan con la aceptación registrada; cualquier diferencia bloquea la
 operación y queda auditada.
 
+## Wompi: Sandbox y producción
+
+El servicio `credifresh-wompi-sandbox` es exclusivamente para pruebas y usa
+SQLite efímera, registros sintéticos y llaves `prv_test_` / `test_events_`.
+No le agregues llaves de producción ni cambies su ambiente.
+
+La API admite ambientes separados mediante `WOMPI_ENVIRONMENT=sandbox` o
+`WOMPI_ENVIRONMENT=production`. En ambos casos, `ENVIRONMENT` debe coincidir
+con el runtime (`sandbox` o `production`). Sandbox se bloquea en un runtime de
+producción; producción requiere además `WOMPI_PRODUCTION_ENABLED=true` y las
+llaves correspondientes (`prv_prod_` y `prod_events_`). El webhook de
+producción es `/integraciones/wompi/production/eventos`; el de Sandbox es
+`/integraciones/wompi/sandbox/eventos`.
+
+Habilitar el código de producción no pone la plataforma en condiciones de
+operar cobros reales. Antes se necesita un servicio Render separado, base de
+datos persistente con migraciones y respaldo, secretos de producción agregados
+solo en ese servicio, URL de eventos configurada en Wompi y pruebas de
+conciliación revisadas. `render.yaml` crea recursos de demostración gratuitos
+y temporales; no se deben usar para clientes ni transacciones reales. No actives
+`WOMPI_PRODUCTION_ENABLED` en ellos.
+
 ## Docker
 
 La migración es una operación de lanzamiento explícita, no una acción

@@ -12,10 +12,10 @@ from app.models.credito import Credito
 from app.models.pago import Pago
 from app.models.usuario import Usuario
 from app.models.wompi_pago import WompiPago
-from app.services.wompi_service import crear_link_pago, validar_firma_evento
+from app.services.wompi_service import crear_link_pago, get_wompi_environment, validar_firma_evento
 
 
-router = APIRouter(prefix="/integraciones/wompi", tags=["Wompi Sandbox"])
+router = APIRouter(prefix="/integraciones/wompi", tags=["Wompi"])
 
 
 @router.post("/creditos/{credito_id}/cuotas/{cuota_id}/link", status_code=201)
@@ -61,7 +61,7 @@ def crear_link_para_cuota(
             "monto_cop": str(existente.monto_esperado),
             "estado": existente.estado,
             "checkout_url": existente.checkout_url,
-            "ambiente": "sandbox",
+            "ambiente": get_wompi_environment(),
         }
 
     referencia = secrets.token_hex(16)
@@ -93,7 +93,7 @@ def crear_link_para_cuota(
         "monto_cop": str(pendiente),
         "estado": intento.estado,
         "checkout_url": intento.checkout_url,
-        "ambiente": "sandbox",
+        "ambiente": link["ambiente"],
     }
 
 
@@ -136,18 +136,22 @@ def obtener_estado_intento_cuota(
     }
 
 
-@router.post("/sandbox/eventos", status_code=200)
-async def recibir_evento_sandbox(
+async def _recibir_evento(
     request: Request,
     db: Session = Depends(get_db),
     x_event_checksum: str | None = Header(default=None, alias="X-Event-Checksum"),
+    expected_environment: str = "sandbox",
 ):
     try:
         event = await request.json()
     except Exception as exc:
         raise HTTPException(status_code=400, detail="El evento recibido no contiene JSON válido.") from exc
-    if not isinstance(event, dict) or event.get("environment") != "test":
-        raise HTTPException(status_code=400, detail="Este endpoint solo acepta eventos de Sandbox.")
+    configured_environment = get_wompi_environment()
+    expected_event_environment = "test" if expected_environment == "sandbox" else "prod"
+    if configured_environment != expected_environment:
+        raise HTTPException(status_code=404, detail="El endpoint no está habilitado para el ambiente configurado.")
+    if not isinstance(event, dict) or event.get("environment") != expected_event_environment:
+        raise HTTPException(status_code=400, detail="El ambiente del evento no coincide con este endpoint.")
     if not validar_firma_evento(event, x_event_checksum):
         raise HTTPException(status_code=401, detail="La firma del evento de Wompi no es válida.")
     if event.get("event") != "transaction.updated":
@@ -204,7 +208,7 @@ async def recibir_evento_sandbox(
         credito_id=credito.id,
         cuota_id=cuota.id,
         monto_pagado=monto_pagado,
-        metodo_pago="WOMPI_SANDBOX",
+        metodo_pago="WOMPI_SANDBOX" if expected_environment == "sandbox" else "WOMPI",
     ))
     intento.estado = "PAGADO"
     intento.wompi_transaction_id = transaction_id
@@ -213,3 +217,21 @@ async def recibir_evento_sandbox(
         credito.estado = "PAGADO"
     db.commit()
     return {"recibido": True, "procesado": True, "estado": "PAGADO"}
+
+
+@router.post("/sandbox/eventos", status_code=200)
+async def recibir_evento_sandbox(
+    request: Request,
+    db: Session = Depends(get_db),
+    x_event_checksum: str | None = Header(default=None, alias="X-Event-Checksum"),
+):
+    return await _recibir_evento(request, db, x_event_checksum, "sandbox")
+
+
+@router.post("/production/eventos", status_code=200)
+async def recibir_evento_produccion(
+    request: Request,
+    db: Session = Depends(get_db),
+    x_event_checksum: str | None = Header(default=None, alias="X-Event-Checksum"),
+):
+    return await _recibir_evento(request, db, x_event_checksum, "production")

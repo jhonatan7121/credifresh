@@ -10,28 +10,52 @@ from fastapi import HTTPException
 
 
 SANDBOX_API_BASE = "https://sandbox.wompi.co/v1"
+PRODUCTION_API_BASE = "https://production.wompi.co/v1"
 SANDBOX_CHECKOUT_BASE = "https://checkout.wompi.co/l/"
 
 
-def _sandbox_credentials() -> tuple[str, str]:
+def _wompi_environment() -> str:
     environment = os.getenv("WOMPI_ENVIRONMENT", "sandbox").strip().lower()
     runtime_environment = os.getenv("ENVIRONMENT", "development").strip().lower()
-    private_key = os.getenv("WOMPI_PRIVATE_KEY", "").strip()
-    events_secret = os.getenv("WOMPI_EVENTS_SECRET", "").strip()
-    if runtime_environment in {"production", "prod"}:
+    if environment not in {"sandbox", "production"}:
         raise HTTPException(
-            status_code=503,
-            detail="Wompi Sandbox está bloqueado en el backend de producción.",
+            status_code=503, detail="WOMPI_ENVIRONMENT debe ser sandbox o production."
         )
-    if environment != "sandbox":
-        raise HTTPException(status_code=503, detail="La integración Wompi de CrediFresh está limitada a Sandbox.")
-    if not private_key.startswith("prv_test_") or not events_secret.startswith("test_events_"):
-        raise HTTPException(status_code=503, detail="Configura las credenciales de prueba de Wompi en el backend.")
-    return private_key, events_secret
+    if environment == "sandbox" and runtime_environment in {"production", "prod"}:
+        raise HTTPException(status_code=503, detail="Wompi Sandbox está bloqueado en el backend de producción.")
+    if environment == "production" and runtime_environment not in {"production", "prod"}:
+        raise HTTPException(status_code=503, detail="Wompi Producción solo está habilitado en el backend de producción.")
+    if environment == "production" and os.getenv("WOMPI_PRODUCTION_ENABLED", "false").strip().lower() != "true":
+        raise HTTPException(status_code=503, detail="La integración Wompi de producción no está habilitada explícitamente.")
+    return environment
+
+
+def get_wompi_environment() -> str:
+    """Return the configured Wompi environment after enforcing runtime isolation."""
+    return _wompi_environment()
+
+
+def _private_key() -> tuple[str, str, str]:
+    environment = _wompi_environment()
+    private_key = os.getenv("WOMPI_PRIVATE_KEY", "").strip()
+    expected_prefix = "prv_test_" if environment == "sandbox" else "prv_prod_"
+    if not private_key.startswith(expected_prefix):
+        raise HTTPException(status_code=503, detail="Configura la llave privada del ambiente Wompi seleccionado.")
+    api_base = SANDBOX_API_BASE if environment == "sandbox" else PRODUCTION_API_BASE
+    return environment, private_key, api_base
+
+
+def _events_secret() -> tuple[str, str]:
+    environment = _wompi_environment()
+    events_secret = os.getenv("WOMPI_EVENTS_SECRET", "").strip()
+    expected_prefix = "test_events_" if environment == "sandbox" else "prod_events_"
+    if not events_secret.startswith(expected_prefix):
+        raise HTTPException(status_code=503, detail="Configura el secreto de eventos del ambiente Wompi seleccionado.")
+    return environment, events_secret
 
 
 def crear_link_pago(*, referencia: str, credito_id: int, numero_cuota: int, monto: Decimal) -> dict:
-    private_key, _ = _sandbox_credentials()
+    environment, private_key, api_base = _private_key()
     amount_in_cents = int((Decimal(str(monto)) * 100).quantize(Decimal("1")))
     if amount_in_cents <= 0:
         raise HTTPException(status_code=400, detail="El saldo pendiente de la cuota no es válido.")
@@ -45,7 +69,7 @@ def crear_link_pago(*, referencia: str, credito_id: int, numero_cuota: int, mont
         "sku": referencia,
     }
     request = urllib.request.Request(
-        f"{SANDBOX_API_BASE}/payment_links",
+        f"{api_base}/payment_links",
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {private_key}",
@@ -62,16 +86,20 @@ def crear_link_pago(*, referencia: str, credito_id: int, numero_cuota: int, mont
         # include the response body or request headers, which may contain data.
         raise HTTPException(
             status_code=502,
-            detail=f"Wompi Sandbox rechazó la creación del link de pago (HTTP {exc.code}).",
+            detail=f"Wompi rechazó la creación del link de pago (HTTP {exc.code}).",
         ) from exc
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=502, detail="No fue posible conectar con Wompi Sandbox.") from exc
+        raise HTTPException(status_code=502, detail="No fue posible conectar con Wompi.") from exc
 
     data = body.get("data") if isinstance(body, dict) else None
     link_id = data.get("id") if isinstance(data, dict) else None
     if not isinstance(link_id, str) or not link_id:
-        raise HTTPException(status_code=502, detail="Wompi Sandbox respondió sin un identificador de link válido.")
-    return {"id": link_id, "checkout_url": f"{SANDBOX_CHECKOUT_BASE}{link_id}"}
+        raise HTTPException(status_code=502, detail="Wompi respondió sin un identificador de link válido.")
+    return {
+        "id": link_id,
+        "checkout_url": f"{SANDBOX_CHECKOUT_BASE}{link_id}",
+        "ambiente": environment,
+    }
 
 
 def _property_value(event: dict, property_path: str):
@@ -88,7 +116,10 @@ def _property_value(event: dict, property_path: str):
 
 
 def validar_firma_evento(event: dict, header_checksum: str | None = None) -> bool:
-    _, events_secret = _sandbox_credentials()
+    environment, events_secret = _events_secret()
+    expected_event_environment = "test" if environment == "sandbox" else "prod"
+    if event.get("environment") != expected_event_environment:
+        return False
     signature = event.get("signature")
     if not isinstance(signature, dict):
         return False
