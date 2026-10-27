@@ -97,6 +97,45 @@ def crear_link_para_cuota(
     }
 
 
+@router.get("/creditos/{credito_id}/cuotas/{cuota_id}/estado")
+def obtener_estado_intento_cuota(
+    credito_id: int,
+    cuota_id: int,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user),
+):
+    """Return the latest Wompi Sandbox attempt without exposing its checkout URL."""
+    credito = db.query(Credito).filter(Credito.id == credito_id).first()
+    cuota = db.query(CuotaAmortizacion).filter(
+        CuotaAmortizacion.id == cuota_id,
+        CuotaAmortizacion.credito_id == credito_id,
+    ).first()
+    if not credito or not cuota:
+        raise HTTPException(status_code=404, detail="Crédito o cuota no encontrados.")
+    if current_user.rol == "CLIENTE":
+        cliente = db.query(Cliente).filter(Cliente.usuario_id == current_user.id).first()
+        if not cliente or cliente.id != credito.cliente_id:
+            raise HTTPException(status_code=403, detail="No tienes permiso para consultar este crédito.")
+    elif current_user.rol not in {"ADMIN", "GESTOR"}:
+        raise HTTPException(status_code=403, detail="No tienes permiso para consultar este intento.")
+
+    intento = (
+        db.query(WompiPago)
+        .filter(WompiPago.cuota_id == cuota.id)
+        .order_by(WompiPago.id.desc())
+        .first()
+    )
+    return {
+        "credito_id": credito.id,
+        "cuota_id": cuota.id,
+        "estado_cuota": cuota.estado,
+        "monto_cuota": str(cuota.monto_cuota),
+        "monto_pagado": str(cuota.monto_pagado),
+        "estado_ultimo_intento": intento.estado if intento else None,
+        "actualizado_en": intento.actualizado_en.isoformat() if intento and intento.actualizado_en else None,
+    }
+
+
 @router.post("/sandbox/eventos", status_code=200)
 async def recibir_evento_sandbox(
     request: Request,
@@ -133,6 +172,7 @@ async def recibir_evento_sandbox(
     estado = transaction.get("status")
     if estado != "APPROVED":
         intento.estado = "FALLIDO" if estado in {"DECLINED", "ERROR", "VOIDED"} else "PENDIENTE"
+        intento.wompi_transaction_id = transaction_id
         db.commit()
         return {"recibido": True, "procesado": False, "estado": intento.estado}
 

@@ -35,12 +35,12 @@ Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base.metadata.create_all(bind=engine)
 
 
-def make_event(secret="test_events_route"):
+def make_event(secret="test_events_route", status="APPROVED"):
     event = {
         "event": "transaction.updated",
         "data": {"transaction": {
             "id": "route-tx-001",
-            "status": "APPROVED",
+            "status": status,
             "amount_in_cents": 125000,
             "currency": "COP",
             "payment_link_id": "route-link-001",
@@ -51,7 +51,7 @@ def make_event(secret="test_events_route"):
         ]},
         "timestamp": 1792600000,
     }
-    raw = "route-tx-001APPROVED1250001792600000" + secret
+    raw = f"route-tx-001{status}1250001792600000" + secret
     event["signature"]["checksum"] = hashlib.sha256(raw.encode()).hexdigest()
     return event
 
@@ -142,6 +142,40 @@ def test_webhook_rechaza_firma_invalida_sin_aplicar_pago():
         assert db.query(CuotaAmortizacion).one().monto_pagado == Decimal("0.00")
     finally:
         db.close()
+
+
+def test_webhook_declinado_registra_intento_fallido_sin_aplicar_pago():
+    event = make_event(status="DECLINED")
+    checksum = event["signature"]["checksum"]
+    first = call_webhook(event, checksum)
+    second = call_webhook(event, checksum)
+    assert first["estado"] == "FALLIDO"
+    assert second["duplicado"] is True
+    db = Session()
+    try:
+        intent = db.query(WompiPago).one()
+        assert intent.estado == "FALLIDO"
+        assert intent.wompi_transaction_id == "route-tx-001"
+        assert db.query(Pago).count() == 0
+        quota = db.query(CuotaAmortizacion).one()
+        assert quota.estado == "PENDIENTE"
+        assert quota.monto_pagado == Decimal("0.00")
+    finally:
+        db.close()
+
+
+def test_estado_de_intento_no_expone_checkout_y_respeta_propiedad():
+    db = Session()
+    try:
+        credit = db.query(Credito).one()
+        quota = db.query(CuotaAmortizacion).one()
+        user = db.query(Usuario).one()
+        result = wompi_endpoint.obtener_estado_intento_cuota(credit.id, quota.id, db, user)
+    finally:
+        db.close()
+    assert result["estado_cuota"] == "PENDIENTE"
+    assert result["estado_ultimo_intento"] == "PENDIENTE"
+    assert "checkout_url" not in result
 
 
 def test_crear_link_reutiliza_intento_pendiente(monkeypatch):
