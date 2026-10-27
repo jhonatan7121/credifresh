@@ -35,11 +35,11 @@ Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base.metadata.create_all(bind=engine)
 
 
-def make_event(secret="test_events_route", status="APPROVED"):
+def make_event(secret="test_events_route", status="APPROVED", transaction_id="route-tx-001"):
     event = {
         "event": "transaction.updated",
         "data": {"transaction": {
-            "id": "route-tx-001",
+            "id": transaction_id,
             "status": status,
             "amount_in_cents": 125000,
             "currency": "COP",
@@ -51,7 +51,7 @@ def make_event(secret="test_events_route", status="APPROVED"):
         ]},
         "timestamp": 1792600000,
     }
-    raw = f"route-tx-001{status}1250001792600000" + secret
+    raw = f"{transaction_id}{status}1250001792600000" + secret
     event["signature"]["checksum"] = hashlib.sha256(raw.encode()).hexdigest()
     return event
 
@@ -126,6 +126,24 @@ def test_webhook_aplica_pago_aprobado_y_es_idempotente():
         assert db.query(Pago).count() == 1
         assert db.query(CuotaAmortizacion).one().estado == "PAGADA"
         assert db.query(WompiPago).one().wompi_transaction_id == "route-tx-001"
+    finally:
+        db.close()
+
+
+def test_webhook_procesa_aprobacion_despues_de_pendiente_con_mismo_id():
+    pending_event = make_event(status="PENDING", transaction_id="route-tx-pending-001")
+    pending = call_webhook(pending_event, pending_event["signature"]["checksum"])
+    assert pending["estado"] == "PENDIENTE"
+
+    approved_event = make_event(status="APPROVED", transaction_id="route-tx-pending-001")
+    approved = call_webhook(approved_event, approved_event["signature"]["checksum"])
+    assert approved["estado"] == "PAGADO"
+
+    db = Session()
+    try:
+        assert db.query(Pago).count() == 1
+        assert db.query(CuotaAmortizacion).one().estado == "PAGADA"
+        assert db.query(WompiPago).one().wompi_transaction_id == "route-tx-pending-001"
     finally:
         db.close()
 

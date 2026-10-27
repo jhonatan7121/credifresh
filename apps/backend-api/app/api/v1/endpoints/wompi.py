@@ -171,8 +171,14 @@ async def recibir_evento_sandbox(
 
     estado = transaction.get("status")
     if estado != "APPROVED":
-        intento.estado = "FALLIDO" if estado in {"DECLINED", "ERROR", "VOIDED"} else "PENDIENTE"
-        intento.wompi_transaction_id = transaction_id
+        estado_final_fallido = estado in {"DECLINED", "ERROR", "VOIDED"}
+        intento.estado = "FALLIDO" if estado_final_fallido else "PENDIENTE"
+        # Wompi can send transaction.updated more than once for the same
+        # transaction (for example PENDING followed by APPROVED). Only mark
+        # an ID as handled once its status is terminal, so a later approval
+        # is not mistaken for a duplicate of an earlier pending notification.
+        if estado_final_fallido:
+            intento.wompi_transaction_id = transaction_id
         db.commit()
         return {"recibido": True, "procesado": False, "estado": intento.estado}
 
