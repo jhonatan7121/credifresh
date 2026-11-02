@@ -13,14 +13,18 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  type TextInputInstance,
   View,
 } from "react-native";
 import * as SecureStore from "expo-secure-store";
 import { StatusBar } from "expo-status-bar";
 import { api, apiHost, ApiError, Loan, Notification, User } from "./src/api";
+import type { WompiInstallmentStatus } from "./src/api";
 
 const TOKEN_KEY = "credifresh_access_token";
 const CLIENT_LINK_REQUIRED = "Tu cuenta aún no está vinculada a un perfil de cliente";
+const WOMPI_SANDBOX_HOST = "credifresh-wompi-sandbox.onrender.com";
+const isWompiSandboxApi = apiHost.toLowerCase() === `https://${WOMPI_SANDBOX_HOST}`;
 const colors = {
   ink: "#0D1B4C",
   deep: "#0D1B4C",
@@ -133,12 +137,14 @@ export default function App() {
   const [showAllNotifications, setShowAllNotifications] = useState(false);
   const [selectedLoanId, setSelectedLoanId] = useState<number | null>(null);
   const [email, setEmail] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [identityNumber, setIdentityNumber] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [confirmPassword, setConfirmPassword] = useState("");
-  const emailRef = useRef<TextInput>(null);
-  const passwordRef = useRef<TextInput>(null);
-  const confirmPasswordRef = useRef<TextInput>(null);
+  const emailRef = useRef<TextInputInstance | null>(null);
+  const passwordRef = useRef<TextInputInstance | null>(null);
+  const confirmPasswordRef = useRef<TextInputInstance | null>(null);
   const [authMode, setAuthMode] = useState<"login" | "register" | "forgot" | "reset">("login");
   const [resetToken, setResetToken] = useState("");
   const [phone, setPhone] = useState("");
@@ -156,6 +162,8 @@ export default function App() {
   const [requestedAmount, setRequestedAmount] = useState("500000");
   const [requestedTerm, setRequestedTerm] = useState("6");
   const [busy, setBusy] = useState(false);
+  const [paymentBusyQuotaId, setPaymentBusyQuotaId] = useState<number | null>(null);
+  const [paymentMessages, setPaymentMessages] = useState<Record<number, string>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -169,6 +177,9 @@ export default function App() {
     [loans, selectedLoanId],
   );
   const emailIsValid = /^[\w.-]+@[\w.-]+\.\w+$/.test(email.trim());
+  const identityIsValid = /^\d{5,20}$/.test(identityNumber.trim());
+  const phoneIsValid = /^\+?\d{7,20}$/.test(phone.trim());
+  const clientDetailsAreValid = fullName.trim().length >= 2 && identityIsValid && phoneIsValid;
   const unreadNotificationCount = useMemo(
     () => notifications.filter((notification) => !notification.leida).length,
     [notifications],
@@ -176,7 +187,7 @@ export default function App() {
   const visibleNotifications = showAllNotifications ? notifications : notifications.slice(0, 5);
 
   useEffect(() => {
-    const openResetLink = (url: string | null) => {
+    const openResetLink = (url: string | null | undefined) => {
       if (!url || !url.includes("reset-password")) return;
       const match = url.match(/[?&]token=([^&]+)/);
       if (!match) return;
@@ -403,18 +414,26 @@ export default function App() {
       setError("Escribe un correo electrónico válido.");
       return;
     }
-    if (password.length < 6) {
-      setError("La contraseña debe tener al menos 6 caracteres.");
+    if (password.length < 12) {
+      setError("La contraseña debe tener al menos 12 caracteres.");
       return;
     }
     if (password !== confirmPassword) {
       setError("Las contraseñas no coinciden.");
       return;
     }
+    if (!clientDetailsAreValid) {
+      setError("Completa tu nombre, una cédula válida y un teléfono válido.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
-      await api.register(email.trim(), password);
+      await api.register(email.trim(), password, {
+        nombre: fullName.trim(),
+        cedula: identityNumber.trim(),
+        telefono: phone.trim(),
+      });
       const result = await api.login(email.trim(), password);
       await loadAccount(result.access_token);
       await SecureStore.setItemAsync(TOKEN_KEY, result.access_token);
@@ -422,13 +441,38 @@ export default function App() {
       setPendingSessionToken(null);
       setPassword("");
       setConfirmPassword("");
+      setFullName("");
+      setIdentityNumber("");
       setAuthMode("login");
       Alert.alert(
         "Cuenta creada",
-        "Tu acceso quedó creado. El equipo de CrediFresh debe verificar y vincular tu perfil antes de que puedas consultar o solicitar créditos.",
+        "Tu cuenta y perfil de cliente quedaron creados. Ya puedes continuar en CrediFresh.",
       );
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "No se pudo crear la cuenta.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createMyClientProfile() {
+    if (!token || !clientDetailsAreValid) {
+      setError("Completa tu nombre, una cédula válida y un teléfono válido.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await api.registerMyProfile(token, {
+        nombre: fullName.trim(),
+        cedula: identityNumber.trim(),
+        telefono: phone.trim(),
+      });
+      await loadAccount(token);
+      Alert.alert("Perfil creado", "Ya puedes continuar. Completa tu dirección en Mi perfil para terminar tus datos de contacto.");
+    } catch (cause) {
+      if (await handleExpiredSession(cause)) return;
+      setError(cause instanceof Error ? cause.message : "No se pudo crear tu perfil.");
     } finally {
       setBusy(false);
     }
@@ -480,6 +524,7 @@ export default function App() {
     setLoans([]);
     setNotifications([]);
     setNotificationError("");
+    setPaymentMessages({});
     setNotificationBusyId(null);
     setShowAllNotifications(false);
     setSelectedLoanId(null);
@@ -519,6 +564,96 @@ export default function App() {
     } finally {
       setBusy(false);
       setRefreshing(false);
+    }
+  }
+
+  function setPaymentMessage(quotaId: number, message: string) {
+    setPaymentMessages((current) => ({ ...current, [quotaId]: message }));
+  }
+
+  async function openSandboxPayment(loan: Loan, installment: Loan["cuotas"][number]) {
+    if (!token || paymentBusyQuotaId != null) return;
+    if (!isWompiSandboxApi) {
+      setPaymentMessage(installment.id, "Los pagos desde la app solo están disponibles contra el Sandbox de Wompi.");
+      return;
+    }
+    if (loan.credito.estado !== "DESEMBOLSADO") {
+      setPaymentMessage(installment.id, "Solo se pueden probar pagos para cuotas de créditos desembolsados.");
+      return;
+    }
+    if (installmentBalance(installment) <= 0) {
+      setPaymentMessage(installment.id, "Esta cuota ya no tiene saldo pendiente.");
+      return;
+    }
+
+    Alert.alert(
+      "Pago de prueba",
+      `Se abrirá Wompi Sandbox por ${currency(installmentBalance(installment))}. No se moverá dinero real.`,
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Continuar",
+          onPress: () => { void createAndOpenSandboxLink(loan, installment); },
+        },
+      ],
+    );
+  }
+
+  async function createAndOpenSandboxLink(loan: Loan, installment: Loan["cuotas"][number]) {
+    if (!token || paymentBusyQuotaId != null) return;
+    setPaymentBusyQuotaId(installment.id);
+    setPaymentMessage(installment.id, "Preparando el checkout de prueba…");
+    try {
+      const result = await api.createWompiInstallmentLink(token, loan.credito.id, installment.id);
+      if (result.ambiente !== "sandbox") {
+        throw new Error("El backend no confirmó el ambiente Sandbox. No abrimos el checkout.");
+      }
+      let checkoutUrl: URL;
+      try { checkoutUrl = new URL(result.checkout_url); }
+      catch { throw new Error("Wompi respondió con un enlace de pago inválido."); }
+      if (checkoutUrl.protocol !== "https:" || checkoutUrl.hostname !== "checkout.wompi.co" || !checkoutUrl.pathname.startsWith("/l/")) {
+        throw new Error("El enlace no corresponde al checkout seguro de Wompi. No lo abrimos.");
+      }
+      await Linking.openURL(checkoutUrl.toString());
+      setPaymentMessage(installment.id, "Checkout Sandbox abierto. Al volver, consulta el resultado para actualizar la cuota.");
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 401) {
+        await handleExpiredSession(cause);
+      }
+      setPaymentMessage(installment.id, cause instanceof Error ? cause.message : "No se pudo iniciar el pago de prueba.");
+    } finally {
+      setPaymentBusyQuotaId(null);
+    }
+  }
+
+  async function checkSandboxPayment(loan: Loan, installment: Loan["cuotas"][number]) {
+    if (!token || paymentBusyQuotaId != null) return;
+    if (!isWompiSandboxApi) {
+      setPaymentMessage(installment.id, "La consulta de pagos solo está disponible contra el Sandbox.");
+      return;
+    }
+    setPaymentBusyQuotaId(installment.id);
+    setPaymentMessage(installment.id, "Consultando el resultado de Wompi…");
+    try {
+      const result: WompiInstallmentStatus = await api.wompiInstallmentStatus(token, loan.credito.id, installment.id);
+      const latestLoans = await api.myLoans(token);
+      setLoans(latestLoans);
+      const messages: Record<string, string> = {
+        PAGADO: "Pago aprobado y aplicado a esta cuota.",
+        FALLIDO: "Wompi rechazó el intento. La cuota sigue pendiente; puedes volver a intentarlo.",
+        PENDIENTE: "Wompi todavía no confirma el resultado. Espera unos segundos y consulta de nuevo.",
+      };
+      setPaymentMessage(
+        installment.id,
+        result.estado_ultimo_intento
+          ? messages[result.estado_ultimo_intento] || `Estado del intento: ${result.estado_ultimo_intento}.`
+          : "No hay un intento de pago registrado para esta cuota.",
+      );
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 401) await handleExpiredSession(cause);
+      setPaymentMessage(installment.id, cause instanceof Error ? cause.message : "No se pudo consultar el pago.");
+    } finally {
+      setPaymentBusyQuotaId(null);
     }
   }
 
@@ -687,7 +822,7 @@ export default function App() {
           </View>
           <Text style={styles.eyebrow}>CREDIFRESH · CLIENTES</Text>
           <Text style={styles.title}>{authMode === "login" ? <>Tu crédito,{"\n"}más cerca.</> : authMode === "register" ? "Crea tu acceso" : authMode === "forgot" ? "Recupera tu acceso" : "Nueva contraseña"}</Text>
-          <Text style={styles.subtitle}>{authMode === "login" ? "Consulta tus solicitudes y revisa tus ofertas desde tu iPhone." : authMode === "register" ? "Regístrate con tu correo. El equipo de CrediFresh verificará y vinculará tu perfil antes de habilitar las solicitudes." : authMode === "forgot" ? "Te enviaremos un enlace seguro para que puedas crear una nueva contraseña." : "Elige una contraseña nueva para volver a ingresar a CrediFresh."}</Text>
+          <Text style={styles.subtitle}>{authMode === "login" ? "Consulta tus solicitudes y revisa tus ofertas desde tu iPhone." : authMode === "register" ? "Crea tu cuenta y registra tus datos para configurar tu perfil de cliente." : authMode === "forgot" ? "Te enviaremos un enlace seguro para que puedas crear una nueva contraseña." : "Elige una contraseña nueva para volver a ingresar a CrediFresh."}</Text>
           <View style={styles.card}>
             {authMode !== "reset" ? <><Text style={styles.fieldLabel}>Correo electrónico</Text>
             <TextInput
@@ -706,6 +841,14 @@ export default function App() {
               accessibilityLabel="Correo electrónico"
             />
             {email.length > 0 && !emailIsValid ? <Text style={styles.validationHint}>Ingresa un correo con formato nombre@correo.com.</Text> : null}</> : <Text style={styles.bodyText}>El enlace es temporal y solo puede utilizarse una vez.</Text>}
+            {authMode === "register" ? <>
+              <Text style={[styles.fieldLabel, styles.secondLabel]}>Nombre completo</Text>
+              <TextInput autoCapitalize="words" autoComplete="name" textContentType="name" placeholder="Como aparece en tu documento" placeholderTextColor="#91a19d" value={fullName} onChangeText={(value) => { setFullName(value); setError(""); }} style={styles.input} accessibilityLabel="Nombre completo" />
+              <Text style={[styles.fieldLabel, styles.secondLabel]}>Cédula</Text>
+              <TextInput keyboardType="number-pad" placeholder="Número de documento" placeholderTextColor="#91a19d" value={identityNumber} onChangeText={(value) => { setIdentityNumber(value.replace(/\D/g, "").slice(0, 20)); setError(""); }} style={styles.input} accessibilityLabel="Cédula" />
+              <Text style={[styles.fieldLabel, styles.secondLabel]}>Teléfono</Text>
+              <TextInput keyboardType="phone-pad" autoComplete="tel" textContentType="telephoneNumber" placeholder="+57 300 123 4567" placeholderTextColor="#91a19d" value={phone} onChangeText={(value) => { setPhone(value.replace(/(?!^\+)\D/g, "").slice(0, 21)); setError(""); }} style={styles.input} accessibilityLabel="Teléfono" />
+            </> : null}
             {authMode !== "forgot" ? <><View style={[styles.passwordLabelRow, styles.secondLabel]}>
               <Text style={styles.fieldLabel}>{authMode === "reset" ? "Nueva contraseña" : "Contraseña"}</Text>
               <Pressable
@@ -765,7 +908,7 @@ export default function App() {
             <PrimaryButton
               title={busy ? "Un momento…" : authMode === "login" ? "Iniciar sesión" : authMode === "register" ? "Crear cuenta" : authMode === "forgot" ? "Enviar enlace" : "Guardar contraseña nueva"}
               onPress={() => void (authMode === "login" ? signIn() : authMode === "register" ? signUp() : authMode === "forgot" ? requestPasswordReset() : completePasswordReset())}
-              disabled={busy || (authMode !== "reset" && !emailIsValid) || ((authMode === "login" || authMode === "register" || authMode === "reset") && password.length < (authMode === "register" || authMode === "reset" ? 12 : 6)) || ((authMode === "register" || authMode === "reset") && (confirmPassword.length < 12 || password !== confirmPassword))}
+              disabled={busy || (authMode !== "reset" && !emailIsValid) || ((authMode === "login" || authMode === "register" || authMode === "reset") && password.length < (authMode === "register" || authMode === "reset" ? 12 : 6)) || ((authMode === "register" || authMode === "reset") && (confirmPassword.length < 12 || password !== confirmPassword)) || (authMode === "register" && !clientDetailsAreValid)}
             />
             {authMode === "login" ? <Pressable onPress={() => { setAuthMode("forgot"); setError(""); }} style={styles.authSwitch}><Text style={styles.authSwitchText}>¿Olvidaste tu contraseña?</Text></Pressable> : null}
             {authMode === "reset" ? <Pressable onPress={() => { setAuthMode("forgot"); setResetToken(""); setError(""); }} style={styles.authSwitch}><Text style={styles.authSwitchText}>Solicitar un enlace nuevo</Text></Pressable> : null}
@@ -774,7 +917,7 @@ export default function App() {
           {authMode === "login" || authMode === "register" ? <Pressable onPress={() => { setAuthMode(authMode === "login" ? "register" : "login"); setError(""); }} style={styles.authSwitch}>
             <Text style={styles.authSwitchText}>{authMode === "login" ? "¿No tienes acceso? Crear cuenta" : "¿Ya tienes una cuenta? Iniciar sesión"}</Text>
           </Pressable> : <Pressable onPress={() => { setAuthMode("login"); setResetToken(""); setError(""); }} style={styles.authSwitch}><Text style={styles.authSwitchText}>Volver a iniciar sesión</Text></Pressable>}
-          <Text style={styles.hint}>Para entrar necesitas una cuenta cliente vinculada a tu perfil de CrediFresh.</Text>
+          <Text style={styles.hint}>Al registrarte, tus datos crearán tu perfil de cliente. Si ya existe un perfil con tu cédula, el equipo deberá verificarlo antes de asociar información crediticia.</Text>
           {apiHost.includes("localhost") ? <Text style={styles.warning}>Para probar en iPhone, configura la dirección local de tu computador en EXPO_PUBLIC_API_BASE_URL.</Text> : null}
           <View style={styles.connectionPanel}>
             <View style={styles.connectionHeading}>
@@ -812,12 +955,27 @@ export default function App() {
         {error ? <Text style={styles.error}>{error}</Text> : null}
         {needsLink ? (
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Verificación pendiente</Text>
-            <Text style={styles.bodyText}>Tu cuenta está activa, pero todavía no está vinculada a un perfil de cliente. El equipo de CrediFresh debe verificar tus datos y vincular el perfil desde el portal antes de habilitar tus créditos.</Text>
-            <PrimaryButton title={busy ? "Consultando…" : "Ya me vincularon · Actualizar"} onPress={() => void refresh()} disabled={busy} />
+            <Text style={styles.sectionTitle}>Completa tu perfil de cliente</Text>
+            <Text style={styles.bodyText}>Registra tus datos para crear el perfil asociado a esta cuenta. Si ya tienes un perfil o créditos en CrediFresh, el equipo deberá verificar tu identidad antes de asociarlos.</Text>
+            <Text style={[styles.fieldLabel, styles.secondLabel]}>Nombre completo</Text>
+            <TextInput autoCapitalize="words" autoComplete="name" textContentType="name" placeholder="Como aparece en tu documento" placeholderTextColor="#91a19d" value={fullName} onChangeText={(value) => { setFullName(value); setError(""); }} style={styles.input} accessibilityLabel="Nombre completo" />
+            <Text style={[styles.fieldLabel, styles.secondLabel]}>Cédula</Text>
+            <TextInput keyboardType="number-pad" placeholder="Número de documento" placeholderTextColor="#91a19d" value={identityNumber} onChangeText={(value) => { setIdentityNumber(value.replace(/\D/g, "").slice(0, 20)); setError(""); }} style={styles.input} accessibilityLabel="Cédula" />
+            <Text style={[styles.fieldLabel, styles.secondLabel]}>Teléfono</Text>
+            <TextInput keyboardType="phone-pad" autoComplete="tel" textContentType="telephoneNumber" placeholder="+57 300 123 4567" placeholderTextColor="#91a19d" value={phone} onChangeText={(value) => { setPhone(value.replace(/(?!^\+)\D/g, "").slice(0, 21)); setError(""); }} style={styles.input} accessibilityLabel="Teléfono" />
+            <PrimaryButton title={busy ? "Guardando…" : "Crear perfil y continuar"} onPress={() => void createMyClientProfile()} disabled={busy || !clientDetailsAreValid} />
           </View>
         ) : selectedLoan ? (
-          <LoanDetail loan={selectedLoan} busy={busy} onAccept={() => confirmAcceptance(selectedLoan)} />
+          <LoanDetail
+            loan={selectedLoan}
+            busy={busy}
+            sandboxPaymentsEnabled={isWompiSandboxApi}
+            paymentBusyQuotaId={paymentBusyQuotaId}
+            paymentMessages={paymentMessages}
+            onAccept={() => confirmAcceptance(selectedLoan)}
+            onPayInstallment={(installment) => void openSandboxPayment(selectedLoan, installment)}
+            onCheckPayment={(installment) => void checkSandboxPayment(selectedLoan, installment)}
+          />
         ) : (
           <>
             <View style={styles.welcome}>
@@ -934,7 +1092,7 @@ export default function App() {
                 <Text style={styles.link}>Ver detalle →</Text>
               </Pressable>
             ))}
-            <Text style={styles.footerNote}>El desembolso y los pagos siguen deshabilitados mientras se configura la integración bancaria.</Text>
+            <Text style={styles.footerNote}>{isWompiSandboxApi ? "Los pagos de prueba están disponibles en Wompi Sandbox. No se mueve dinero real; los desembolsos siguen deshabilitados." : "El desembolso y los pagos siguen deshabilitados en este ambiente."}</Text>
           </>
         )}
       </ScrollView>
@@ -942,7 +1100,25 @@ export default function App() {
   );
 }
 
-function LoanDetail({ loan, busy, onAccept }: { loan: Loan; busy: boolean; onAccept: () => void }) {
+function LoanDetail({
+  loan,
+  busy,
+  sandboxPaymentsEnabled,
+  paymentBusyQuotaId,
+  paymentMessages,
+  onAccept,
+  onPayInstallment,
+  onCheckPayment,
+}: {
+  loan: Loan;
+  busy: boolean;
+  sandboxPaymentsEnabled: boolean;
+  paymentBusyQuotaId: number | null;
+  paymentMessages: Record<number, string>;
+  onAccept: () => void;
+  onPayInstallment: (installment: Loan["cuotas"][number]) => void;
+  onCheckPayment: (installment: Loan["cuotas"][number]) => void;
+}) {
   const approved = loan.credito.estado === "APROBADO";
   const accepted = Boolean(loan.aceptacion);
   return (
@@ -985,6 +1161,24 @@ function LoanDetail({ loan, busy, onAccept }: { loan: Loan; busy: boolean; onAcc
               <InfoRow label="Valor" value={currency(installment.monto_cuota)} />
               <InfoRow label="Pagado" value={currency(installment.monto_pagado)} />
               <InfoRow label="Saldo de esta cuota" value={currency(installmentBalance(installment))} />
+              {sandboxPaymentsEnabled && loan.credito.estado === "DESEMBOLSADO" && installmentBalance(installment) > 0 ? (
+                <View style={styles.sandboxPaymentActions}>
+                  <PrimaryButton
+                    title={paymentBusyQuotaId === installment.id ? "Preparando pago…" : "Pagar esta cuota · Sandbox"}
+                    onPress={() => onPayInstallment(installment)}
+                    disabled={busy || paymentBusyQuotaId != null}
+                  />
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => onCheckPayment(installment)}
+                    disabled={paymentBusyQuotaId != null}
+                    style={styles.authSwitch}
+                  >
+                    <Text style={styles.authSwitchText}>{paymentBusyQuotaId === installment.id ? "Consultando…" : "Actualizar estado del pago"}</Text>
+                  </Pressable>
+                  {paymentMessages[installment.id] ? <Text style={styles.paymentMessage}>{paymentMessages[installment.id]}</Text> : null}
+                </View>
+              ) : null}
             </View>
           ))}
         </View>
@@ -1107,6 +1301,8 @@ const styles = StyleSheet.create({
   installmentState: { color: colors.teal, fontSize: 12, fontWeight: "800" },
   installmentPaid: { color: "#3f7b5d" },
   installmentOverdueText: { color: "#a73535" },
+  sandboxPaymentActions: { marginTop: 4, paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.border },
+  paymentMessage: { color: colors.muted, fontSize: 12, lineHeight: 18, textAlign: "center", marginTop: 4 },
   installmentDate: { color: colors.muted, fontSize: 13, marginTop: 5 },
   notice: { marginTop: 18, padding: 18, borderWidth: 1, borderColor: "#e8d7b8", borderRadius: 18, backgroundColor: "#fff8e9" },
   noticeTitle: { color: colors.amber, fontWeight: "800", fontSize: 16, marginBottom: 6 },

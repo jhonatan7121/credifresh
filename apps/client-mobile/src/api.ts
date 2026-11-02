@@ -41,6 +41,7 @@ export type Loan = {
     total_estimado: number | string;
   };
   cuotas: Array<{
+    id: number;
     numero_cuota: number;
     fecha_vencimiento: string;
     monto_cuota: number | string;
@@ -67,6 +68,24 @@ export type FinancialProfile = FinancialProfileInput & {
 };
 
 type LoginResponse = { access_token: string; token_type: string };
+export type WompiSandboxLink = {
+  referencia: string;
+  credito_id: number;
+  cuota_id: number;
+  monto_cop: string;
+  estado: string;
+  checkout_url: string;
+  ambiente: string;
+};
+export type WompiInstallmentStatus = {
+  credito_id: number;
+  cuota_id: number;
+  estado_cuota: string;
+  monto_cuota: string;
+  monto_pagado: string;
+  estado_ultimo_intento: string | null;
+  actualizado_en: string | null;
+};
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
@@ -126,13 +145,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ email, password }),
     }),
-  register: (email: string, password: string) =>
+  register: (email: string, password: string, profile: { nombre: string; cedula: string; telefono: string }) =>
     request<User>("/auth/register", undefined, {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, ...profile }),
     }),
   me: (token: string) => request<User>("/auth/me", token),
   myProfile: (token: string) => request<{ id: number; nombre: string; email: string | null; telefono: string; direccion: string | null }>("/clientes/me", token),
+  registerMyProfile: (token: string, profile: { nombre: string; cedula: string; telefono: string }) =>
+    request<{ id: number; nombre: string; email: string | null; telefono: string; direccion: string | null }>("/clientes/me/registro-perfil", token, { method: "POST", body: JSON.stringify(profile) }),
   updateMyContact: (token: string, contact: { telefono: string; direccion: string }) =>
     request<{ mensaje: string; telefono: string; direccion: string }>("/clientes/me/contacto", token, { method: "PUT", body: JSON.stringify(contact) }),
   requestPasswordReset: (email: string) => request<{ mensaje: string }>("/auth/password-reset/request", undefined, { method: "POST", body: JSON.stringify({ email }) }),
@@ -145,6 +166,10 @@ export const api = {
   requestLoan: (token: string, loan: { monto: number; plazo_meses: number }) =>
     request<{ mensaje: string; credito: Loan["credito"] }>("/creditos/mis", token, { method: "POST", body: JSON.stringify(loan) }),
   myLoans: (token: string) => request<Loan[]>("/creditos/mis", token),
+  createWompiInstallmentLink: (token: string, creditId: number, installmentId: number) =>
+    request<WompiSandboxLink>(`/integraciones/wompi/creditos/${creditId}/cuotas/${installmentId}/link`, token, { method: "POST" }),
+  wompiInstallmentStatus: (token: string, creditId: number, installmentId: number) =>
+    request<WompiInstallmentStatus>(`/integraciones/wompi/creditos/${creditId}/cuotas/${installmentId}/estado`, token),
   myNotifications: (token: string) => request<Notification[]>("/notificaciones/", token),
   markAllNotificationsRead: (token: string) =>
     request<Notification[]>("/notificaciones/leer-todas", token, { method: "PATCH" }),

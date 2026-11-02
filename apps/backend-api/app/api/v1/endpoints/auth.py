@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.config.database import get_db
 from app.models.usuario import Usuario as UsuarioModel
+from app.models.cliente import Cliente as ClienteModel
 from app.core.security import ALGORITHM, SECRET_KEY, get_password_hash, verify_password, create_access_token
 from app.core.deps import get_current_active_user
 from app.core.rate_limit import enforce_rate_limit
@@ -30,6 +31,9 @@ class UsuarioCreate(BaseModel):
     email: str = Field(..., pattern=r"^[\w\.-]+@[\w\.-]+\.\w+$", description="Email del usuario")
     password: str = Field(..., min_length=12, max_length=72, description="Contraseña del usuario (mínimo 12 caracteres)")
     rol: str = Field(default="CLIENTE", description="Rol del usuario")
+    nombre: str | None = Field(default=None, min_length=2, max_length=120)
+    cedula: str | None = Field(default=None, min_length=5, max_length=20, pattern=r"^\d+$")
+    telefono: str | None = Field(default=None, min_length=7, max_length=20, pattern=r"^\+?\d+$")
 
 class UsuarioLogin(BaseModel):
     email: str = Field(..., pattern=r"^[\w\.-]+@[\w\.-]+\.\w+$")
@@ -229,6 +233,17 @@ def registrar_usuario(
     usuario_in: UsuarioCreate,
     db: Session = Depends(get_db)
 ):
+    datos_perfil = (usuario_in.nombre, usuario_in.cedula, usuario_in.telefono)
+    if any(datos_perfil) and not all(datos_perfil):
+        raise HTTPException(status_code=422, detail="Para crear el perfil ingresa nombre, cédula y teléfono")
+
+    # Never attach self-reported identity data to an existing credit file.
+    if usuario_in.cedula and db.query(ClienteModel.id).filter(ClienteModel.cedula == usuario_in.cedula).first():
+        raise HTTPException(
+            status_code=409,
+            detail="Ya existe un perfil con esa cédula. Para proteger la información de crédito, solicita al equipo que verifique y vincule tu cuenta.",
+        )
+
     # Validar que el email no exista
     usuario_existente = (
         db.query(UsuarioModel)
@@ -254,6 +269,24 @@ def registrar_usuario(
     
     db.add(nuevo_usuario)
     db.flush()
+    if all(datos_perfil):
+        cliente = ClienteModel(
+            nombre=usuario_in.nombre.strip(),
+            cedula=usuario_in.cedula,
+            telefono=usuario_in.telefono,
+            email=usuario_in.email.strip().lower(),
+            usuario_id=nuevo_usuario.id,
+        )
+        db.add(cliente)
+        db.flush()
+        registrar_auditoria(
+            db=db,
+            usuario=nuevo_usuario,
+            accion="CREAR_PERFIL_CLIENTE_AUTOSERVICIO",
+            entidad="cliente",
+            entidad_id=cliente.id,
+            detalles={"campos_registrados": ["nombre", "cedula", "telefono", "email", "usuario_id"]},
+        )
     registrar_auditoria(
         db=db,
         usuario=nuevo_usuario,

@@ -9,7 +9,7 @@ La configuración de Expo incluye el identificador iOS `com.credifresh.client`, 
 - Inicio de sesión y creación de cuenta de cliente. Las contraseñas nuevas deben tener mínimo 12 caracteres.
 - Recuperación de contraseña por correo y cambio mediante enlace temporal de un solo uso. La contraseña nueva requiere mínimo 12 caracteres.
 - Captura y edición de teléfono y dirección desde el perfil del cliente; quedan vinculados a sus solicitudes.
-- Al crear cuenta, el equipo de CrediFresh debe verificar y vincular el perfil desde el portal antes de habilitar las solicitudes.
+- El registro solicita nombre, cédula y teléfono y crea el perfil de cliente asociado a la cuenta. Si la cédula ya tiene un perfil o historial, el equipo debe verificar identidad antes de asociar los datos existentes.
 - Creación y actualización del perfil financiero, y solicitud de créditos entre $500.000 y $1.500.000 COP con plazo de 1 a 12 meses.
 - Consulta de estados, condiciones y motivo de rechazo; aceptación explícita de una oferta aprobada.
 - Bandeja de avisos del cliente, con actualización al volver a abrir la app y mientras está activa, contador de pendientes, opción de marcarlos leídos y acceso al crédito relacionado.

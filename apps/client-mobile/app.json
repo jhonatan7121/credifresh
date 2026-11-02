@@ -22,7 +22,10 @@
         "backgroundColor": "#101F4D"
       }
     },
-    "plugins": ["expo-secure-store"],
+    "plugins": [
+      "expo-secure-store",
+      "expo-status-bar"
+    ],
     "extra": {
       "eas": {
         "projectId": "c8c61fc9-6a8f-4173-ac7d-962987d3a22c"

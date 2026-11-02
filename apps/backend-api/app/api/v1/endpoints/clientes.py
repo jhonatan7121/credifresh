@@ -38,6 +38,12 @@ class MiContactoSchema(BaseModel):
     direccion: str = Field(min_length=5, max_length=240)
 
 
+class MiRegistroPerfilSchema(BaseModel):
+    nombre: str = Field(min_length=2, max_length=120)
+    cedula: str = Field(min_length=5, max_length=20, pattern=r"^\d+$")
+    telefono: str = Field(min_length=7, max_length=20, pattern=r"^\+?\d+$")
+
+
 class VincularUsuarioInput(BaseModel):
     usuario_id: int = Field(gt=0)
 
@@ -157,6 +163,61 @@ def obtener_mi_perfil_cliente(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Tu cuenta aún no está vinculada a un perfil de cliente",
         )
+    return {
+        "id": cliente.id,
+        "nombre": cliente.nombre,
+        "email": cliente.email,
+        "telefono": cliente.telefono,
+        "direccion": cliente.direccion,
+    }
+
+
+@router.post("/me/registro-perfil", status_code=201)
+def registrar_mi_perfil_cliente(
+    datos: MiRegistroPerfilSchema,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(RoleChecker(["CLIENTE"])),
+):
+    """Create and associate a new customer profile for a signed-in client account."""
+    existente = db.query(ClienteModel).filter(ClienteModel.usuario_id == current_user.id).first()
+    if existente:
+        raise HTTPException(status_code=409, detail="Tu cuenta ya tiene un perfil de cliente")
+
+    # Existing credit files require staff verification before linking to an account.
+    cedula_existente = db.query(ClienteModel.id).filter(ClienteModel.cedula == datos.cedula).first()
+    if cedula_existente:
+        raise HTTPException(
+            status_code=409,
+            detail="Ya existe un perfil con esa cédula. Para proteger la información de crédito, solicita al equipo que verifique y vincule tu cuenta.",
+        )
+
+    cliente = ClienteModel(
+        nombre=datos.nombre.strip(),
+        cedula=datos.cedula,
+        telefono=datos.telefono,
+        email=current_user.email.strip().lower(),
+        usuario_id=current_user.id,
+    )
+    db.add(cliente)
+    try:
+        db.flush()
+        registrar_auditoria(
+            db=db,
+            usuario=current_user,
+            accion="CREAR_PERFIL_CLIENTE_AUTOSERVICIO",
+            entidad="cliente",
+            entidad_id=cliente.id,
+            detalles={"campos_registrados": ["nombre", "cedula", "telefono", "email", "usuario_id"]},
+        )
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Ya existe un perfil con esa cédula. Para proteger la información de crédito, solicita al equipo que verifique y vincule tu cuenta.",
+        )
+
+    db.refresh(cliente)
     return {
         "id": cliente.id,
         "nombre": cliente.nombre,
