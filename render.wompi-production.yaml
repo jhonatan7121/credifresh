@@ -41,7 +41,6 @@ services:
   - type: web
     name: credifresh-wompi-production-portal
     runtime: static
-    region: virginia
     rootDir: apps/admin-portal
     buildCommand: sh render-build.sh
     staticPublishPath: .
