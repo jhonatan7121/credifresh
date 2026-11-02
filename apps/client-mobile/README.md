@@ -51,6 +51,8 @@ La API usa una base de datos temporal de demostración que vence el 13 de noviem
 
 El perfil `preview` continúa apuntando a la API de demostración. El perfil `production` apunta a `https://credifresh-wompi-production.onrender.com`, cuya base de datos está nueva y vacía. Wompi permanece desactivado en esa API hasta que se complete la preparación del negocio y se autorice el cobro real.
 
+El perfil `production-internal` crea instaladores internos para iPhone y Android con la misma API de producción. En iPhone, registra el dispositivo en Expo antes de instalar el build ad hoc. No distribuyas este build a clientes mientras la base de producción esté vacía.
+
 ## Configuración manual
 
 Si no usas el iniciador de la raíz del proyecto, copia `.env.example` como `.env` y configura `EXPO_PUBLIC_API_BASE_URL` con la IP local del computador y el puerto `8000`, por ejemplo `http://192.168.1.25:8000`. No uses `localhost` en el iPhone: apuntaría al propio teléfono. Desde esta carpeta instala dependencias con `npm.cmd install` y ejecuta `npm.cmd start`.

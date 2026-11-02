@@ -10,6 +10,13 @@
         "EXPO_PUBLIC_API_BASE_URL": "https://credifresh-api-demo.onrender.com"
       }
     },
+    "production-internal": {
+      "distribution": "internal",
+      "environment": "production",
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://credifresh-wompi-production.onrender.com"
+      }
+    },
     "production": {
       "autoIncrement": true,
       "environment": "production",
