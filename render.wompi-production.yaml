@@ -1,0 +1,48 @@
+# Separate, paid production deployment for the Wompi collection integration.
+# Keep the sandbox deployment and database unchanged.
+services:
+  - type: web
+    name: credifresh-wompi-production
+    runtime: docker
+    region: virginia
+    plan: starter
+    dockerfilePath: ./apps/backend-api/Dockerfile
+    dockerContext: ./apps/backend-api
+    autoDeployTrigger: off
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: credifresh-wompi-production-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "30"
+      - key: ENVIRONMENT
+        value: production
+      - key: WOMPI_ENVIRONMENT
+        value: production
+      - key: WOMPI_PRODUCTION_ENABLED
+        value: "false"
+      - key: WOMPI_PRIVATE_KEY
+        sync: false
+      - key: WOMPI_EVENTS_SECRET
+        sync: false
+      - key: ADMIN_BOOTSTRAP_TOKEN
+        sync: false
+      - key: BANK_OPERATIONS_ENABLED
+        value: "false"
+      - key: ALLOWED_ORIGINS
+        value: ""
+
+databases:
+  - name: credifresh-wompi-production-db
+    databaseName: credifresh_production
+    user: credifresh_user
+    region: virginia
+    plan: basic-256mb
+    postgresMajorVersion: "15"
+    ipAllowList: []
