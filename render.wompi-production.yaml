@@ -21,6 +21,8 @@ services:
         value: HS256
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
         value: "30"
+      - key: RESET_PASSWORD_URL
+        value: https://credifresh-wompi-production-portal.onrender.com/reset-password.html
       - key: ENVIRONMENT
         value: production
       - key: WOMPI_ENVIRONMENT
@@ -31,12 +33,22 @@ services:
         sync: false
       - key: WOMPI_EVENTS_SECRET
         sync: false
-      - key: ADMIN_BOOTSTRAP_TOKEN
-        sync: false
       - key: BANK_OPERATIONS_ENABLED
         value: "false"
       - key: ALLOWED_ORIGINS
-        value: ""
+        value: https://credifresh-wompi-production-portal.onrender.com
+
+  - type: web
+    name: credifresh-wompi-production-portal
+    runtime: static
+    region: virginia
+    rootDir: apps/admin-portal
+    buildCommand: sh render-build.sh
+    staticPublishPath: .
+    autoDeployTrigger: off
+    envVars:
+      - key: API_BASE_URL
+        value: https://credifresh-wompi-production.onrender.com
 
 databases:
   - name: credifresh-wompi-production-db

@@ -354,8 +354,8 @@ export default function App() {
       setError("Escribe un correo electrónico válido.");
       return;
     }
-    if (password.length < 6) {
-      setError("La contraseña debe tener al menos 6 caracteres.");
+    if (password.length < 12) {
+      setError("La contraseña debe tener al menos 12 caracteres.");
       return;
     }
     setBusy(true);
@@ -448,7 +448,7 @@ export default function App() {
 
   async function completePasswordReset() {
     if (!resetToken) { setError("El enlace no contiene un token válido. Solicita uno nuevo."); return; }
-    if (password.length < 8) { setError("La nueva contraseña debe tener al menos 8 caracteres."); return; }
+    if (password.length < 12) { setError("La nueva contraseña debe tener al menos 12 caracteres."); return; }
     if (password !== confirmPassword) { setError("Las contraseñas no coinciden."); return; }
     setBusy(true); setError("");
     try {
@@ -722,7 +722,7 @@ export default function App() {
               autoComplete={authMode === "reset" ? "new-password" : "password"}
               textContentType={authMode === "reset" ? "newPassword" : "password"}
               secureTextEntry={!showPassword}
-              placeholder={authMode === "reset" ? "Mínimo 8 caracteres" : "Tu contraseña"}
+              placeholder={authMode === "register" || authMode === "reset" ? "Mínimo 12 caracteres" : "Tu contraseña"}
               placeholderTextColor="#91a19d"
               value={password}
               onChangeText={(value) => { setPassword(value); setError(""); }}
@@ -765,7 +765,7 @@ export default function App() {
             <PrimaryButton
               title={busy ? "Un momento…" : authMode === "login" ? "Iniciar sesión" : authMode === "register" ? "Crear cuenta" : authMode === "forgot" ? "Enviar enlace" : "Guardar contraseña nueva"}
               onPress={() => void (authMode === "login" ? signIn() : authMode === "register" ? signUp() : authMode === "forgot" ? requestPasswordReset() : completePasswordReset())}
-              disabled={busy || (authMode !== "reset" && !emailIsValid) || ((authMode === "login" || authMode === "register" || authMode === "reset") && password.length < (authMode === "reset" ? 8 : 6)) || ((authMode === "register" || authMode === "reset") && (confirmPassword.length < (authMode === "reset" ? 8 : 6) || password !== confirmPassword))}
+              disabled={busy || (authMode !== "reset" && !emailIsValid) || ((authMode === "login" || authMode === "register" || authMode === "reset") && password.length < (authMode === "register" || authMode === "reset" ? 12 : 6)) || ((authMode === "register" || authMode === "reset") && (confirmPassword.length < 12 || password !== confirmPassword))}
             />
             {authMode === "login" ? <Pressable onPress={() => { setAuthMode("forgot"); setError(""); }} style={styles.authSwitch}><Text style={styles.authSwitchText}>¿Olvidaste tu contraseña?</Text></Pressable> : null}
             {authMode === "reset" ? <Pressable onPress={() => { setAuthMode("forgot"); setResetToken(""); setError(""); }} style={styles.authSwitch}><Text style={styles.authSwitchText}>Solicitar un enlace nuevo</Text></Pressable> : null}

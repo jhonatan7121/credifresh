@@ -6,8 +6,8 @@ La configuración de Expo incluye el identificador iOS `com.credifresh.client`, 
 
 ## Funciones disponibles
 
-- Inicio de sesión y creación de cuenta de cliente. La contraseña debe tener mínimo 6 caracteres.
-- Recuperación de contraseña por correo y cambio mediante enlace temporal de un solo uso. La contraseña nueva requiere mínimo 8 caracteres.
+- Inicio de sesión y creación de cuenta de cliente. Las contraseñas nuevas deben tener mínimo 12 caracteres.
+- Recuperación de contraseña por correo y cambio mediante enlace temporal de un solo uso. La contraseña nueva requiere mínimo 12 caracteres.
 - Captura y edición de teléfono y dirección desde el perfil del cliente; quedan vinculados a sus solicitudes.
 - Al crear cuenta, el equipo de CrediFresh debe verificar y vincular el perfil desde el portal antes de habilitar las solicitudes.
 - Creación y actualización del perfil financiero, y solicitud de créditos entre $500.000 y $1.500.000 COP con plazo de 1 a 12 meses.
@@ -46,6 +46,10 @@ Para que las solicitudes y consultas del iPhone lleguen a la API alojada, sin in
 Este modo conecta el cliente a `https://credifresh-api-demo.onrender.com`. Expo Go todavía carga la app desde el computador, por lo que la terminal debe permanecer abierta. Para abrir CrediFresh sin depender del computador se necesita compilar e instalar una app iOS independiente; la distribución de prueba en iPhone requiere configurar la firma de Apple.
 
 La API usa una base de datos temporal de demostración que vence el 13 de noviembre de 2026. No ingreses datos reales de clientes. El plan gratuito también bloquea SMTP saliente, así que la recuperación de contraseñas por correo no funcionará allí.
+
+## API de producción en EAS
+
+El perfil `preview` continúa apuntando a la API de demostración. El perfil `production` apunta a `https://credifresh-wompi-production.onrender.com`, cuya base de datos está nueva y vacía. Wompi permanece desactivado en esa API hasta que se complete la preparación del negocio y se autorice el cobro real.
 
 ## Configuración manual
 
