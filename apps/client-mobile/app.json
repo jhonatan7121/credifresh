@@ -10,11 +10,23 @@
     "scheme": "credifresh",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.credifresh.client"
+      "bundleIdentifier": "com.credifresh.client",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
-      "package": "com.credifresh.client"
+      "package": "com.credifresh.client",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-foreground.png",
+        "backgroundColor": "#101F4D"
+      }
     },
-    "plugins": ["expo-secure-store"]
+    "plugins": ["expo-secure-store"],
+    "extra": {
+      "eas": {
+        "projectId": "c8c61fc9-6a8f-4173-ac7d-962987d3a22c"
+      }
+    }
   }
 }
