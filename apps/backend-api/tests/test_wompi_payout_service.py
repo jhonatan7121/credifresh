@@ -83,3 +83,28 @@ def test_payout_webhook_signature_uses_declared_properties(monkeypatch):
 
     assert payouts.validar_firma_evento_payout(event, checksum)
     assert not payouts.validar_firma_evento_payout(event, "0" * 64)
+
+
+def test_payout_sandbox_accepts_dashboard_events_secret_prefix(monkeypatch):
+    set_sandbox(monkeypatch)
+    secret = "prod_events_sandbox-secret-for-test"
+    monkeypatch.setenv("WOMPI_PAYOUT_EVENTS_SECRET", secret)
+    event = {
+        "event": "transaction.updated",
+        "data": {"transaction": {"id": "sandbox-tx", "status": "APPROVED", "amountInCents": 100000}},
+        "signature": {"properties": ["transaction.id", "transaction.status", "transaction.amountInCents"]},
+        "timestamp": 1793650000,
+    }
+    signed = f"sandbox-txAPPROVED1000001793650000{secret}"
+    checksum = hashlib.sha256(signed.encode()).hexdigest()
+    event["signature"]["checksum"] = checksum
+
+    assert payouts.validar_firma_evento_payout(event, checksum)
+
+
+def test_payout_service_rejects_unknown_event_secret_prefix(monkeypatch):
+    set_sandbox(monkeypatch)
+    monkeypatch.setenv("WOMPI_PAYOUT_EVENTS_SECRET", "unknown_events_for-test")
+    with pytest.raises(HTTPException) as exc:
+        payouts._sandbox_credentials()
+    assert exc.value.status_code == 503

@@ -1,6 +1,6 @@
 # Prueba de recaudo Wompi Sandbox
 
-La integración de este backend es deliberadamente exclusiva de Sandbox. No acepta llaves `prv_prod_` ni secretos `prod_events_`, y no envía solicitudes al API de producción.
+La integración de recaudo de este backend es deliberadamente exclusiva de Sandbox. No acepta llaves `prv_prod_` ni secretos de recaudo `prod_events_`, y no envía solicitudes al API de producción.
 
 ## Configuración
 
@@ -41,6 +41,8 @@ En Render configura estas variables en `credifresh-wompi-sandbox`:
 - `WOMPI_PAYOUT_ENVIRONMENT=sandbox`
 
 No reutilices las credenciales de recaudo (`WOMPI_PRIVATE_KEY` y `WOMPI_EVENTS_SECRET`). No guardes secretos en el repositorio.
+
+El secreto de eventos de Pagos a Terceros es independiente del de recaudo. Usa el secreto que muestra Wompi mientras el panel de Pagos a Terceros está en Sandbox; Wompi puede mostrarlo con prefijo `prod_events_`. La URL API y el `WOMPI_PAYOUT_ENVIRONMENT=sandbox` del servicio separado determinan que las solicitudes sigan en Sandbox.
 
 La API de prueba requiere un usuario `ADMIN` autenticado y ofrece `GET /integraciones/wompi/payouts/sandbox/accounts`, `GET /integraciones/wompi/payouts/sandbox/banks`, `POST /integraciones/wompi/payouts/sandbox/lotes` y el webhook `POST /integraciones/wompi/payouts/sandbox/eventos`.
 

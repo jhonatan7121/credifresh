@@ -24,7 +24,11 @@ def _sandbox_credentials() -> tuple[str, str, str]:
     events_secret = os.getenv("WOMPI_PAYOUT_EVENTS_SECRET", "").strip()
     if not api_key or not principal_id:
         raise HTTPException(status_code=503, detail="Faltan las credenciales Sandbox de Pagos a Terceros.")
-    if events_secret and not events_secret.startswith("test_events_"):
+    # Wompi Pagos a Terceros exposes its event secret separately from the
+    # collection integration. Its Sandbox dashboard can show a `prod_events_`
+    # prefix, so the environment is determined by the isolated service and the
+    # dedicated Sandbox API base URL, not by that prefix alone.
+    if events_secret and not events_secret.startswith(("test_events_", "prod_events_")):
         raise HTTPException(status_code=503, detail="El secreto de eventos no corresponde al ambiente Sandbox.")
     return api_key, principal_id, events_secret
 
