@@ -13,6 +13,7 @@ from app.api.v1.endpoints.auditoria import router as auditoria_router
 from app.api.v1.endpoints.notificaciones import router as notificaciones_router
 from app.api.v1.endpoints.usuarios import router as usuarios_router
 from app.api.v1.endpoints.wompi import router as wompi_router
+from app.api.v1.endpoints.wompi_payouts import router as wompi_payouts_router
 
 from app.api.v1.endpoints.simulador import router as simulador_router
 
@@ -74,6 +75,7 @@ app.include_router(notificaciones_router)
 app.include_router(auditoria_router)
 app.include_router(usuarios_router)
 app.include_router(wompi_router)
+app.include_router(wompi_payouts_router)
 
 @app.get("/")
 def home():

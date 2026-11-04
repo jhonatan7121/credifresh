@@ -1,4 +1,4 @@
-# Isolated, disposable Wompi collection sandbox. Never merge into render.yaml.
+# Isolated, disposable Wompi collection and payout test sandbox. Never merge into render.yaml.
 services:
   - type: web
     name: credifresh-wompi-sandbox
@@ -22,6 +22,14 @@ services:
       - key: WOMPI_PRIVATE_KEY
         sync: false
       - key: WOMPI_EVENTS_SECRET
+        sync: false
+      - key: WOMPI_PAYOUT_ENVIRONMENT
+        value: sandbox
+      - key: WOMPI_PAYOUT_API_KEY
+        sync: false
+      - key: WOMPI_PAYOUT_USER_PRINCIPAL_ID
+        sync: false
+      - key: WOMPI_PAYOUT_EVENTS_SECRET
         sync: false
       - key: WOMPI_SANDBOX_SEED_DATA
         value: "true"
