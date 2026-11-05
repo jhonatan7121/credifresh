@@ -5,6 +5,7 @@ from io import BytesIO
 import pytest
 from fastapi import HTTPException
 
+from app.api.v1.endpoints import wompi_payouts as payout_routes
 from app.services import wompi_payout_service as payouts
 
 
@@ -108,3 +109,49 @@ def test_payout_service_rejects_unknown_event_secret_prefix(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         payouts._sandbox_credentials()
     assert exc.value.status_code == 503
+
+
+def test_payout_route_does_not_echo_requested_status_as_wompi_result(monkeypatch):
+    monkeypatch.setattr(payout_routes, "crear_lote_sandbox", lambda *_args: {})
+    payload = payout_routes.LoteSandbox(
+        reference="test-batch-unconfirmed",
+        accountId="sandbox-account",
+        transactionStatus="APPROVED",
+        transactions=[{
+            "bankId": "sandbox-bank",
+            "amount": 100000,
+            "reference": "test-transaction-unconfirmed",
+        }],
+    )
+
+    result = payout_routes.crear_lote_pago_sandbox(payload, None)
+
+    assert result["payout_id"] is None
+    assert result["estado"] is None
+    assert result["registrado_por_wompi"] is False
+    assert "resultado_simulado" not in result
+
+
+def test_payout_route_returns_only_actual_wompi_status(monkeypatch):
+    monkeypatch.setattr(
+        payout_routes,
+        "crear_lote_sandbox",
+        lambda *_args: {"data": {"id": "sandbox-id", "status": "PENDING", "totalTransactions": 1}},
+    )
+    payload = payout_routes.LoteSandbox(
+        reference="test-batch-confirmed",
+        accountId="sandbox-account",
+        transactionStatus="APPROVED",
+        transactions=[{
+            "bankId": "sandbox-bank",
+            "amount": 100000,
+            "reference": "test-transaction-confirmed",
+        }],
+    )
+
+    result = payout_routes.crear_lote_pago_sandbox(payload, None)
+
+    assert result["payout_id"] == "sandbox-id"
+    assert result["estado"] == "PENDING"
+    assert result["registrado_por_wompi"] is True
+    assert result["transacciones_reportadas"] == 1

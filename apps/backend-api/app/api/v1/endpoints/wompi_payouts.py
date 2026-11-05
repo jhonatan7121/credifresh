@@ -93,13 +93,18 @@ def crear_lote_pago_sandbox(payload: LoteSandbox, _: Usuario = Depends(RoleCheck
         data = data["payout"]
     if not isinstance(data, dict):
         data = {}
+    payout_id = data.get("id") or data.get("payoutId") or data.get("payout_id")
+    status = data.get("status") or data.get("state")
     return {
         "ambiente": "sandbox",
-        "payout_id": data.get("id") or data.get("payoutId") or data.get("payout_id"),
+        "payout_id": payout_id,
         "referencia": payload.reference,
-        "estado": data.get("status") or data.get("state"),
-        "resultado_simulado": payload.transactionStatus,
-        "transacciones": data.get("totalTransactions") or data.get("total_transactions") or 1,
+        # Do not echo the requested simulation status as if it were Wompi's
+        # result. A successful HTTP response without an identifiable payout
+        # must remain explicitly unconfirmed until it can be queried.
+        "estado": status,
+        "registrado_por_wompi": bool(payout_id or status),
+        "transacciones_reportadas": data.get("totalTransactions") or data.get("total_transactions"),
     }
 
 
