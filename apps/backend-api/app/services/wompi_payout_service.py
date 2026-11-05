@@ -7,6 +7,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+from urllib.parse import urlencode
 
 from fastapi import HTTPException
 
@@ -63,6 +64,45 @@ def listar_cuentas_sandbox() -> dict:
 
 def listar_bancos_sandbox() -> dict:
     return _request("GET", "/banks")
+
+
+def consultar_lote_sandbox(reference: str) -> dict:
+    """Query Wompi Sandbox by reference and return only non-sensitive batch fields."""
+    if not _IDEMPOTENCY_RE.fullmatch(reference):
+        raise HTTPException(status_code=422, detail="La referencia debe tener 1-64 letras, números o guiones.")
+    response = _request("GET", f"/payouts?{urlencode({'reference': reference, 'limit': 10, 'page': 1})}")
+    data = response.get("data", response)
+
+    if isinstance(data, list):
+        records = data
+    elif isinstance(data, dict):
+        # Some API responses wrap paginated records under one of these keys.
+        records = next(
+            (data[key] for key in ("payouts", "items", "results", "content") if isinstance(data.get(key), list)),
+            [data] if any(key in data for key in ("id", "payoutId", "payout_id", "reference")) else [],
+        )
+    else:
+        records = []
+
+    matches = []
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        # A Wompi response may wrap the payout itself in `payout`.
+        payout = item.get("payout") if isinstance(item.get("payout"), dict) else item
+        item_reference = payout.get("reference") or payout.get("referenceId")
+        if item_reference != reference:
+            continue
+        matches.append({
+            "id": payout.get("id") or payout.get("payoutId") or payout.get("payout_id"),
+            "reference": item_reference,
+            "status": payout.get("status") or payout.get("state"),
+            "amountInCents": payout.get("amountInCents") or payout.get("amount_in_cents"),
+            "totalTransactions": payout.get("totalTransactions") or payout.get("total_transactions"),
+            "createdAt": payout.get("createdAt") or payout.get("created_at"),
+        })
+
+    return {"ambiente": "sandbox", "referencia": reference, "encontrado": bool(matches), "lotes": matches}
 
 
 def crear_lote_sandbox(payload: dict, idempotency_key: str) -> dict:

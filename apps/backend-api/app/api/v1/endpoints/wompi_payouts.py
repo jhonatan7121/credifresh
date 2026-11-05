@@ -2,13 +2,14 @@
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.core.deps import RoleChecker
 from app.models.usuario import Usuario
 from app.services.wompi_payout_service import (
     crear_lote_sandbox,
+    consultar_lote_sandbox,
     listar_bancos_sandbox,
     listar_cuentas_sandbox,
     validar_firma_evento_payout,
@@ -41,6 +42,15 @@ def bancos_sandbox(_: Usuario = Depends(RoleChecker(["ADMIN"]))):
     return listar_bancos_sandbox()
 
 
+@router.get("/lotes")
+def consultar_lote_pago_sandbox(
+    reference: str = Query(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9-]+$"),
+    _: Usuario = Depends(RoleChecker(["ADMIN"])),
+):
+    """Consult Wompi Sandbox directly by batch reference; no beneficiary data is returned."""
+    return consultar_lote_sandbox(reference)
+
+
 @router.post("/lotes", status_code=201)
 def crear_lote_pago_sandbox(payload: LoteSandbox, _: Usuario = Depends(RoleChecker(["ADMIN"]))):
     request_body = payload.model_dump()
@@ -56,13 +66,19 @@ def crear_lote_pago_sandbox(payload: LoteSandbox, _: Usuario = Depends(RoleCheck
         })
     result = crear_lote_sandbox(request_body, payload.reference)
     data = result.get("data", result)
+    if isinstance(data, list):
+        data = data[0] if data and isinstance(data[0], dict) else {}
+    if isinstance(data, dict) and isinstance(data.get("payout"), dict):
+        data = data["payout"]
+    if not isinstance(data, dict):
+        data = {}
     return {
         "ambiente": "sandbox",
-        "payout_id": data.get("id") if isinstance(data, dict) else None,
+        "payout_id": data.get("id") or data.get("payoutId") or data.get("payout_id"),
         "referencia": payload.reference,
-        "estado": data.get("status") if isinstance(data, dict) else None,
+        "estado": data.get("status") or data.get("state"),
         "resultado_simulado": payload.transactionStatus,
-        "transacciones": 1,
+        "transacciones": data.get("totalTransactions") or data.get("total_transactions") or 1,
     }
 
 

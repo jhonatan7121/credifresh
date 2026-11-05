@@ -44,7 +44,9 @@ No reutilices las credenciales de recaudo (`WOMPI_PRIVATE_KEY` y `WOMPI_EVENTS_S
 
 El secreto de eventos de Pagos a Terceros es independiente del de recaudo. Usa el secreto que muestra Wompi mientras el panel de Pagos a Terceros está en Sandbox; Wompi puede mostrarlo con prefijo `prod_events_`. La URL API y el `WOMPI_PAYOUT_ENVIRONMENT=sandbox` del servicio separado determinan que las solicitudes sigan en Sandbox.
 
-La API de prueba requiere un usuario `ADMIN` autenticado y ofrece `GET /integraciones/wompi/payouts/sandbox/accounts`, `GET /integraciones/wompi/payouts/sandbox/banks`, `POST /integraciones/wompi/payouts/sandbox/lotes` y el webhook `POST /integraciones/wompi/payouts/sandbox/eventos`.
+La API de prueba requiere un usuario `ADMIN` autenticado y ofrece `GET /integraciones/wompi/payouts/sandbox/accounts`, `GET /integraciones/wompi/payouts/sandbox/banks`, `POST /integraciones/wompi/payouts/sandbox/lotes`, `GET /integraciones/wompi/payouts/sandbox/lotes?reference=...` para consultar directamente el lote en Wompi Sandbox y el webhook `POST /integraciones/wompi/payouts/sandbox/eventos`.
+
+La consulta de lotes Sandbox debe verificarse por API (`GET /payouts?reference=...`). El panel de Wompi enfocado en historial de transacciones puede no mostrar operaciones de Sandbox; por eso la ausencia en ese panel no prueba por sí sola que el envío haya fallado.
 
 El endpoint de lotes acepta solo una transacción sintética, estado explícito `APPROVED` o `FAILED` y monto máximo de $100.000 COP. El servidor completa los datos del beneficiario con valores ficticios y no guarda ni devuelve datos bancarios reales. Tras desplegar esta versión, configura en Wompi Sandbox la URL HTTPS `https://credifresh-wompi-sandbox.onrender.com/integraciones/wompi/payouts/sandbox/eventos`. Esta URL es distinta del webhook de recaudo.
 
