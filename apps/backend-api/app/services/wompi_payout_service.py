@@ -106,6 +106,35 @@ def consultar_lote_sandbox(reference: str) -> dict:
     return {"ambiente": "sandbox", "referencia": reference, "encontrado": bool(matches), "lotes": matches}
 
 
+def listar_lotes_recientes_sandbox(limit: int = 10, page: int = 1) -> dict:
+    """List recent Sandbox payouts with non-sensitive fields only."""
+    response = _request("GET", f"/payouts?{urlencode({'limit': limit, 'page': page})}")
+    data = response.get("data", response)
+    if isinstance(data, list):
+        records = data
+    elif isinstance(data, dict):
+        records = next(
+            (data[key] for key in ("payouts", "items", "results", "content") if isinstance(data.get(key), list)),
+            [data] if any(key in data for key in ("id", "payoutId", "payout_id", "reference")) else [],
+        )
+    else:
+        records = []
+    summaries = []
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        payout = item.get("payout") if isinstance(item.get("payout"), dict) else item
+        summaries.append({
+            "id": payout.get("id") or payout.get("payoutId") or payout.get("payout_id"),
+            "reference": payout.get("reference") or payout.get("referenceId"),
+            "status": payout.get("status") or payout.get("state"),
+            "amountInCents": payout.get("amountInCents") or payout.get("amount_in_cents"),
+            "totalTransactions": payout.get("totalTransactions") or payout.get("total_transactions"),
+            "createdAt": payout.get("createdAt") or payout.get("created_at"),
+        })
+    return {"ambiente": "sandbox", "lotes": summaries}
+
+
 def consultar_transaccion_sandbox(reference: str) -> dict:
     """Query a Sandbox payout transaction by reference and return safe fields only."""
     if not _IDEMPOTENCY_RE.fullmatch(reference):

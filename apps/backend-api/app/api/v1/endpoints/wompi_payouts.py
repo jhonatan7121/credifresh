@@ -11,6 +11,7 @@ from app.services.wompi_payout_service import (
     crear_lote_sandbox,
     consultar_lote_sandbox,
     consultar_transaccion_sandbox,
+    listar_lotes_recientes_sandbox,
     listar_bancos_sandbox,
     listar_cuentas_sandbox,
     validar_firma_evento_payout,
@@ -50,6 +51,16 @@ def consultar_lote_pago_sandbox(
 ):
     """Consult Wompi Sandbox directly by batch reference; no beneficiary data is returned."""
     return consultar_lote_sandbox(reference)
+
+
+@router.get("/lotes/recientes")
+def listar_lotes_recientes_pago_sandbox(
+    limit: int = Query(10, ge=1, le=10),
+    page: int = Query(1, ge=1),
+    _: Usuario = Depends(RoleChecker(["ADMIN"])),
+):
+    """List recent Sandbox batches, returning no beneficiary or account details."""
+    return listar_lotes_recientes_sandbox(limit=limit, page=page)
 
 
 @router.get("/transactions/{reference}")
