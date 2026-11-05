@@ -8,6 +8,7 @@ import re
 import urllib.error
 import urllib.request
 from urllib.parse import urlencode
+from urllib.parse import quote
 
 from fastapi import HTTPException
 
@@ -103,6 +104,42 @@ def consultar_lote_sandbox(reference: str) -> dict:
         })
 
     return {"ambiente": "sandbox", "referencia": reference, "encontrado": bool(matches), "lotes": matches}
+
+
+def consultar_transaccion_sandbox(reference: str) -> dict:
+    """Query a Sandbox payout transaction by reference and return safe fields only."""
+    if not _IDEMPOTENCY_RE.fullmatch(reference):
+        raise HTTPException(status_code=422, detail="La referencia debe tener 1-64 letras, números o guiones.")
+    response = _request("GET", f"/transactions/{quote(reference, safe='')}")
+    data = response.get("data", response)
+    if isinstance(data, list):
+        records = data
+    elif isinstance(data, dict):
+        records = next(
+            (data[key] for key in ("transactions", "items", "results", "content") if isinstance(data.get(key), list)),
+            [data] if any(key in data for key in ("id", "transactionId", "transaction_id", "reference")) else [],
+        )
+    else:
+        records = []
+
+    matches = []
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        transaction = item.get("transaction") if isinstance(item.get("transaction"), dict) else item
+        item_reference = transaction.get("reference") or transaction.get("referenceId")
+        if item_reference != reference:
+            continue
+        matches.append({
+            "id": transaction.get("id") or transaction.get("transactionId") or transaction.get("transaction_id"),
+            "reference": item_reference,
+            "status": transaction.get("status") or transaction.get("state"),
+            "amountInCents": transaction.get("amountInCents") or transaction.get("amount_in_cents"),
+            "payoutId": transaction.get("payoutId") or transaction.get("payout_id"),
+            "createdAt": transaction.get("createdAt") or transaction.get("created_at"),
+        })
+
+    return {"ambiente": "sandbox", "referencia": reference, "encontrado": bool(matches), "transacciones": matches}
 
 
 def crear_lote_sandbox(payload: dict, idempotency_key: str) -> dict:

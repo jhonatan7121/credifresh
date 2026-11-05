@@ -10,6 +10,7 @@ from app.models.usuario import Usuario
 from app.services.wompi_payout_service import (
     crear_lote_sandbox,
     consultar_lote_sandbox,
+    consultar_transaccion_sandbox,
     listar_bancos_sandbox,
     listar_cuentas_sandbox,
     validar_firma_evento_payout,
@@ -49,6 +50,15 @@ def consultar_lote_pago_sandbox(
 ):
     """Consult Wompi Sandbox directly by batch reference; no beneficiary data is returned."""
     return consultar_lote_sandbox(reference)
+
+
+@router.get("/transactions/{reference}")
+def consultar_transaccion_pago_sandbox(
+    reference: str,
+    _: Usuario = Depends(RoleChecker(["ADMIN"])),
+):
+    """Query Wompi Sandbox directly by transaction reference; no beneficiary data is returned."""
+    return consultar_transaccion_sandbox(reference)
 
 
 @router.post("/lotes", status_code=201)
