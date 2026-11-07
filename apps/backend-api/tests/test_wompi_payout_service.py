@@ -155,3 +155,93 @@ def test_payout_route_returns_only_actual_wompi_status(monkeypatch):
     assert result["estado"] == "PENDING"
     assert result["registrado_por_wompi"] is True
     assert result["transacciones_reportadas"] == 1
+
+
+def test_consultar_lote_acepta_envolturas_de_respuesta_anidadas(monkeypatch):
+    set_sandbox(monkeypatch)
+    monkeypatch.setattr(
+        payouts,
+        "_request",
+        lambda *_args, **_kwargs: {
+            "data": {
+                "result": {
+                    "payouts": [{
+                        "payout": {
+                            "id": "sandbox-payout-id",
+                            "reference": "test-batch-002",
+                            "status": "TOTAL_PAYMENT",
+                            "amountInCents": 100000,
+                            "totalTransactions": 1,
+                        }
+                    }]
+                }
+            }
+        },
+    )
+
+    result = payouts.consultar_lote_sandbox("test-batch-002")
+
+    assert result["encontrado"] is True
+    assert result["lotes"] == [{
+        "id": "sandbox-payout-id",
+        "reference": "test-batch-002",
+        "status": "TOTAL_PAYMENT",
+        "amountInCents": 100000,
+        "totalTransactions": 1,
+        "createdAt": None,
+    }]
+
+
+def test_listar_lotes_y_transacciones_acepta_envolturas_anidadas(monkeypatch):
+    set_sandbox(monkeypatch)
+    responses = iter([
+        {"data": {"data": {"items": [{
+            "id": "sandbox-payout-id",
+            "reference": "test-batch-003",
+            "status": "TOTAL_PAYMENT",
+            "totalTransactions": 1,
+        }]}}},
+        {"data": {"result": {"transactions": {"items": [{
+            "transaction": {
+                "id": "sandbox-transaction-id",
+                "reference": "test-transaction-003",
+                "status": "APPROVED",
+                "amountInCents": 100000,
+            }
+        }]}}}},
+    ])
+    monkeypatch.setattr(payouts, "_request", lambda *_args, **_kwargs: next(responses))
+
+    batches = payouts.listar_lotes_recientes_sandbox()
+    transactions = payouts.consultar_transacciones_lote_sandbox("sandbox-payout-id")
+
+    assert batches["lotes"][0]["reference"] == "test-batch-003"
+    assert transactions["encontrado"] is True
+    assert transactions["transacciones_reportadas"] == 1
+    assert transactions["transacciones"][0]["status"] == "APPROVED"
+
+
+def test_consultar_transaccion_acepta_transaccion_unica_anidada(monkeypatch):
+    set_sandbox(monkeypatch)
+    monkeypatch.setattr(
+        payouts,
+        "_request",
+        lambda *_args, **_kwargs: {
+            "data": {
+                "result": {
+                    "transaction": {
+                        "id": "sandbox-transaction-id",
+                        "reference": "test-transaction-004",
+                        "status": "FAILED",
+                        "amountInCents": 100000,
+                        "payoutId": "sandbox-payout-id",
+                    }
+                }
+            }
+        },
+    )
+
+    result = payouts.consultar_transaccion_sandbox("test-transaction-004")
+
+    assert result["encontrado"] is True
+    assert result["transacciones"][0]["status"] == "FAILED"

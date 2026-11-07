@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.core.deps import RoleChecker
@@ -130,14 +130,10 @@ def crear_lote_pago_sandbox(payload: LoteSandbox, _: Usuario = Depends(RoleCheck
 
 @router.post("/eventos", status_code=200)
 async def recibir_evento_payout_sandbox(
-    request: Request,
+    event: dict = Body(..., description="Evento payout.updated o transaction.updated enviado por Wompi."),
     x_event_checksum: str | None = Header(default=None, alias="X-Event-Checksum"),
 ):
-    try:
-        event = await request.json()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="El evento no contiene JSON válido.") from exc
-    if not isinstance(event, dict) or event.get("event") not in {"payout.updated", "transaction.updated"}:
+    if event.get("event") not in {"payout.updated", "transaction.updated"}:
         raise HTTPException(status_code=400, detail="Tipo de evento de Pagos a Terceros no reconocido.")
     if not validar_firma_evento_payout(event, x_event_checksum):
         raise HTTPException(status_code=401, detail="La firma del evento Sandbox no es válida.")

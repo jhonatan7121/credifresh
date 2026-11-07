@@ -14,6 +14,76 @@ from fastapi import HTTPException
 
 SANDBOX_API_BASE = "https://api.sandbox.payouts.wompi.co/v1"
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+_RESPONSE_ENVELOPE_KEYS = ("data", "result", "response", "payload", "_embedded")
+_COLLECTION_KEYS = ("payouts", "transactions", "items", "results", "content", "records", "rows", "data")
+
+
+def _first_value(record: dict, *keys: str):
+    for key in keys:
+        value = record.get(key)
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _record_from(value, singular_keys: tuple[str, ...], record_keys: tuple[str, ...], depth: int = 0) -> dict:
+    """Unwrap a single Wompi record from common API response envelopes."""
+    if depth > 6:
+        return {}
+    if isinstance(value, list):
+        for item in value:
+            record = _record_from(item, singular_keys, record_keys, depth + 1)
+            if record:
+                return record
+        return {}
+    if not isinstance(value, dict):
+        return {}
+
+    for key in singular_keys + _RESPONSE_ENVELOPE_KEYS:
+        nested = value.get(key)
+        if isinstance(nested, (dict, list)):
+            record = _record_from(nested, singular_keys, record_keys, depth + 1)
+            if record:
+                return record
+    if any(key in value for key in record_keys):
+        return value
+    return {}
+
+
+def _records_from(value, collection_keys: tuple[str, ...], singular_keys: tuple[str, ...], record_keys: tuple[str, ...], depth: int = 0) -> list[dict]:
+    """Find a record list through nested pagination and data envelopes."""
+    if depth > 6:
+        return []
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if not isinstance(value, dict):
+        return []
+
+    for key in collection_keys:
+        nested = value.get(key)
+        if isinstance(nested, list):
+            return [item for item in nested if isinstance(item, dict)]
+        if isinstance(nested, dict):
+            records = _records_from(nested, collection_keys, singular_keys, record_keys, depth + 1)
+            if records:
+                return records
+
+    for key in singular_keys:
+        nested = value.get(key)
+        if isinstance(nested, (dict, list)):
+            record = _record_from(nested, singular_keys, record_keys, depth + 1)
+            return [record] if record else []
+
+    for key in _RESPONSE_ENVELOPE_KEYS:
+        nested = value.get(key)
+        if isinstance(nested, (dict, list)):
+            records = _records_from(nested, collection_keys, singular_keys, record_keys, depth + 1)
+            if records:
+                return records
+
+    if any(key in value for key in record_keys):
+        return [value]
+    return []
 
 
 def _sandbox_credentials() -> tuple[str, str, str]:
@@ -72,35 +142,33 @@ def consultar_lote_sandbox(reference: str) -> dict:
     if not _IDEMPOTENCY_RE.fullmatch(reference):
         raise HTTPException(status_code=422, detail="La referencia debe tener 1-64 letras, números o guiones.")
     response = _request("GET", f"/payouts?{urlencode({'reference': reference, 'limit': 10, 'page': 1})}")
-    data = response.get("data", response)
-
-    if isinstance(data, list):
-        records = data
-    elif isinstance(data, dict):
-        # Some API responses wrap paginated records under one of these keys.
-        records = next(
-            (data[key] for key in ("payouts", "items", "results", "content") if isinstance(data.get(key), list)),
-            [data] if any(key in data for key in ("id", "payoutId", "payout_id", "reference")) else [],
-        )
-    else:
-        records = []
+    records = _records_from(
+        response,
+        collection_keys=("payouts", "items", "results", "content", "records", "rows", "data"),
+        singular_keys=("payout",),
+        record_keys=("id", "payoutId", "payout_id", "reference", "referenceId", "reference_id"),
+    )
 
     matches = []
     for item in records:
         if not isinstance(item, dict):
             continue
         # A Wompi response may wrap the payout itself in `payout`.
-        payout = item.get("payout") if isinstance(item.get("payout"), dict) else item
-        item_reference = payout.get("reference") or payout.get("referenceId")
+        payout = _record_from(
+            item,
+            singular_keys=("payout",),
+            record_keys=("id", "payoutId", "payout_id", "reference", "referenceId", "reference_id"),
+        )
+        item_reference = _first_value(payout, "reference", "referenceId", "reference_id")
         if item_reference != reference:
             continue
         matches.append({
-            "id": payout.get("id") or payout.get("payoutId") or payout.get("payout_id"),
+            "id": _first_value(payout, "id", "payoutId", "payout_id"),
             "reference": item_reference,
-            "status": payout.get("status") or payout.get("state"),
-            "amountInCents": payout.get("amountInCents") or payout.get("amount_in_cents"),
-            "totalTransactions": payout.get("totalTransactions") or payout.get("total_transactions"),
-            "createdAt": payout.get("createdAt") or payout.get("created_at"),
+            "status": _first_value(payout, "status", "state", "payoutStatus", "payout_status"),
+            "amountInCents": _first_value(payout, "amountInCents", "amount_in_cents", "amount"),
+            "totalTransactions": _first_value(payout, "totalTransactions", "total_transactions"),
+            "createdAt": _first_value(payout, "createdAt", "created_at"),
         })
 
     return {"ambiente": "sandbox", "referencia": reference, "encontrado": bool(matches), "lotes": matches}
@@ -111,17 +179,15 @@ def consultar_lote_por_id_sandbox(payout_id: str) -> dict:
     if not _IDEMPOTENCY_RE.fullmatch(payout_id):
         raise HTTPException(status_code=422, detail="El ID del lote contiene caracteres no permitidos.")
     response = _request("GET", f"/payouts/{quote(payout_id, safe='')}")
-    data = response.get("data", response)
-    if isinstance(data, list):
-        data = data[0] if data and isinstance(data[0], dict) else {}
-    if isinstance(data, dict) and isinstance(data.get("payout"), dict):
-        data = data["payout"]
-    if not isinstance(data, dict):
-        data = {}
+    data = _record_from(
+        response,
+        singular_keys=("payout",),
+        record_keys=("id", "payoutId", "payout_id", "reference", "referenceId", "reference_id", "status", "state"),
+    )
 
-    result_id = data.get("id") or data.get("payoutId") or data.get("payout_id")
-    reference = data.get("reference") or data.get("referenceId")
-    status = data.get("status") or data.get("state")
+    result_id = _first_value(data, "id", "payoutId", "payout_id")
+    reference = _first_value(data, "reference", "referenceId", "reference_id")
+    status = _first_value(data, "status", "state", "payoutStatus", "payout_status")
     return {
         "ambiente": "sandbox",
         "encontrado": bool(result_id or reference or status),
@@ -129,9 +195,9 @@ def consultar_lote_por_id_sandbox(payout_id: str) -> dict:
             "id": result_id,
             "referencia": reference,
             "estado": status,
-            "monto_centavos": data.get("amountInCents") or data.get("amount_in_cents"),
-            "transacciones_reportadas": data.get("totalTransactions") or data.get("total_transactions"),
-            "creado_en": data.get("createdAt") or data.get("created_at"),
+            "monto_centavos": _first_value(data, "amountInCents", "amount_in_cents", "amount"),
+            "transacciones_reportadas": _first_value(data, "totalTransactions", "total_transactions"),
+            "creado_en": _first_value(data, "createdAt", "created_at"),
         },
     }
 
@@ -141,28 +207,28 @@ def consultar_transacciones_lote_sandbox(payout_id: str) -> dict:
     if not _IDEMPOTENCY_RE.fullmatch(payout_id):
         raise HTTPException(status_code=422, detail="El ID del lote contiene caracteres no permitidos.")
     response = _request("GET", f"/payouts/{quote(payout_id, safe='')}/transactions")
-    data = response.get("data", response)
-    if isinstance(data, list):
-        records = data
-    elif isinstance(data, dict):
-        records = next(
-            (data[key] for key in ("transactions", "items", "results", "content") if isinstance(data.get(key), list)),
-            [],
-        )
-    else:
-        records = []
+    records = _records_from(
+        response,
+        collection_keys=("transactions", "items", "results", "content", "records", "rows", "data"),
+        singular_keys=("transaction",),
+        record_keys=("id", "transactionId", "transaction_id", "reference", "referenceId", "reference_id", "status", "state"),
+    )
 
     transactions = []
     for item in records:
         if not isinstance(item, dict):
             continue
-        transaction = item.get("transaction") if isinstance(item.get("transaction"), dict) else item
+        transaction = _record_from(
+            item,
+            singular_keys=("transaction",),
+            record_keys=("id", "transactionId", "transaction_id", "reference", "referenceId", "reference_id", "status", "state"),
+        )
         transactions.append({
-            "id": transaction.get("id") or transaction.get("transactionId") or transaction.get("transaction_id"),
-            "reference": transaction.get("reference") or transaction.get("referenceId"),
-            "status": transaction.get("status") or transaction.get("state"),
-            "amountInCents": transaction.get("amountInCents") or transaction.get("amount_in_cents"),
-            "createdAt": transaction.get("createdAt") or transaction.get("created_at"),
+            "id": _first_value(transaction, "id", "transactionId", "transaction_id"),
+            "reference": _first_value(transaction, "reference", "referenceId", "reference_id"),
+            "status": _first_value(transaction, "status", "state", "transactionStatus", "transaction_status"),
+            "amountInCents": _first_value(transaction, "amountInCents", "amount_in_cents", "amount"),
+            "createdAt": _first_value(transaction, "createdAt", "created_at"),
         })
 
     return {
@@ -177,28 +243,28 @@ def consultar_transacciones_lote_sandbox(payout_id: str) -> dict:
 def listar_lotes_recientes_sandbox(limit: int = 10, page: int = 1) -> dict:
     """List recent Sandbox payouts with non-sensitive fields only."""
     response = _request("GET", f"/payouts?{urlencode({'limit': limit, 'page': page})}")
-    data = response.get("data", response)
-    if isinstance(data, list):
-        records = data
-    elif isinstance(data, dict):
-        records = next(
-            (data[key] for key in ("payouts", "items", "results", "content") if isinstance(data.get(key), list)),
-            [data] if any(key in data for key in ("id", "payoutId", "payout_id", "reference")) else [],
-        )
-    else:
-        records = []
+    records = _records_from(
+        response,
+        collection_keys=("payouts", "items", "results", "content", "records", "rows", "data"),
+        singular_keys=("payout",),
+        record_keys=("id", "payoutId", "payout_id", "reference", "referenceId", "reference_id"),
+    )
     summaries = []
     for item in records:
         if not isinstance(item, dict):
             continue
-        payout = item.get("payout") if isinstance(item.get("payout"), dict) else item
+        payout = _record_from(
+            item,
+            singular_keys=("payout",),
+            record_keys=("id", "payoutId", "payout_id", "reference", "referenceId", "reference_id"),
+        )
         summaries.append({
-            "id": payout.get("id") or payout.get("payoutId") or payout.get("payout_id"),
-            "reference": payout.get("reference") or payout.get("referenceId"),
-            "status": payout.get("status") or payout.get("state"),
-            "amountInCents": payout.get("amountInCents") or payout.get("amount_in_cents"),
-            "totalTransactions": payout.get("totalTransactions") or payout.get("total_transactions"),
-            "createdAt": payout.get("createdAt") or payout.get("created_at"),
+            "id": _first_value(payout, "id", "payoutId", "payout_id"),
+            "reference": _first_value(payout, "reference", "referenceId", "reference_id"),
+            "status": _first_value(payout, "status", "state", "payoutStatus", "payout_status"),
+            "amountInCents": _first_value(payout, "amountInCents", "amount_in_cents", "amount"),
+            "totalTransactions": _first_value(payout, "totalTransactions", "total_transactions"),
+            "createdAt": _first_value(payout, "createdAt", "created_at"),
         })
     return {"ambiente": "sandbox", "lotes": summaries}
 
@@ -208,32 +274,32 @@ def consultar_transaccion_sandbox(reference: str) -> dict:
     if not _IDEMPOTENCY_RE.fullmatch(reference):
         raise HTTPException(status_code=422, detail="La referencia debe tener 1-64 letras, números o guiones.")
     response = _request("GET", f"/transactions/{quote(reference, safe='')}")
-    data = response.get("data", response)
-    if isinstance(data, list):
-        records = data
-    elif isinstance(data, dict):
-        records = next(
-            (data[key] for key in ("transactions", "items", "results", "content") if isinstance(data.get(key), list)),
-            [data] if any(key in data for key in ("id", "transactionId", "transaction_id", "reference")) else [],
-        )
-    else:
-        records = []
+    records = _records_from(
+        response,
+        collection_keys=("transactions", "items", "results", "content", "records", "rows", "data"),
+        singular_keys=("transaction",),
+        record_keys=("id", "transactionId", "transaction_id", "reference", "referenceId", "reference_id"),
+    )
 
     matches = []
     for item in records:
         if not isinstance(item, dict):
             continue
-        transaction = item.get("transaction") if isinstance(item.get("transaction"), dict) else item
-        item_reference = transaction.get("reference") or transaction.get("referenceId")
+        transaction = _record_from(
+            item,
+            singular_keys=("transaction",),
+            record_keys=("id", "transactionId", "transaction_id", "reference", "referenceId", "reference_id"),
+        )
+        item_reference = _first_value(transaction, "reference", "referenceId", "reference_id")
         if item_reference != reference:
             continue
         matches.append({
-            "id": transaction.get("id") or transaction.get("transactionId") or transaction.get("transaction_id"),
+            "id": _first_value(transaction, "id", "transactionId", "transaction_id"),
             "reference": item_reference,
-            "status": transaction.get("status") or transaction.get("state"),
-            "amountInCents": transaction.get("amountInCents") or transaction.get("amount_in_cents"),
-            "payoutId": transaction.get("payoutId") or transaction.get("payout_id"),
-            "createdAt": transaction.get("createdAt") or transaction.get("created_at"),
+            "status": _first_value(transaction, "status", "state", "transactionStatus", "transaction_status"),
+            "amountInCents": _first_value(transaction, "amountInCents", "amount_in_cents", "amount"),
+            "payoutId": _first_value(transaction, "payoutId", "payout_id"),
+            "createdAt": _first_value(transaction, "createdAt", "created_at"),
         })
 
     return {"ambiente": "sandbox", "referencia": reference, "encontrado": bool(matches), "transacciones": matches}
