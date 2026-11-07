@@ -1,4 +1,4 @@
-# Isolated, disposable Wompi collection and payout test sandbox. Never merge into render.yaml.
+# Isolated Wompi collection and payout test sandbox. Never connect production data here.
 services:
   - type: web
     name: credifresh-wompi-sandbox
@@ -12,7 +12,9 @@ services:
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
-        value: sqlite:////tmp/credifresh-wompi-sandbox.db
+        fromDatabase:
+          name: credifresh-wompi-sandbox-db
+          property: connectionString
       - key: SECRET_KEY
         generateValue: true
       - key: ENVIRONMENT
@@ -35,7 +37,17 @@ services:
         value: "true"
       - key: WOMPI_SANDBOX_TEST_PASSWORD
         sync: false
+      - key: ADMIN_BOOTSTRAP_TOKEN
+        sync: false
       - key: BANK_OPERATIONS_ENABLED
         value: "false"
       - key: ALLOWED_ORIGINS
         value: https://sandbox.invalid
+
+databases:
+  - name: credifresh-wompi-sandbox-db
+    databaseName: credifresh_wompi_sandbox
+    user: credifresh_sandbox
+    region: virginia
+    plan: 0.1c-256mb
+    ipAllowList: []

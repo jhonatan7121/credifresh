@@ -1,13 +1,13 @@
 #!/bin/sh
 set -eu
 
-# Fail closed: this entrypoint is only for the isolated, disposable test service.
+# Fail closed: this entrypoint is only for the isolated Wompi Sandbox service.
 [ "${ENVIRONMENT:-}" = "sandbox" ] || { echo "Refusing to start outside sandbox."; exit 1; }
 [ "${WOMPI_ENVIRONMENT:-}" = "sandbox" ] || { echo "Refusing to use a non-sandbox Wompi environment."; exit 1; }
 [ "${WOMPI_SANDBOX_SEED_DATA:-}" = "true" ] || { echo "Sandbox seed flag is required."; exit 1; }
 case "${DATABASE_URL:-}" in
-  sqlite:////tmp/credifresh-wompi-sandbox.db) ;;
-  *) echo "Refusing to start unless using the disposable /tmp SQLite database."; exit 1 ;;
+  postgres://*|postgresql://*) ;;
+  *) echo "Refusing to start unless using a dedicated PostgreSQL database."; exit 1 ;;
 esac
 
 alembic upgrade head

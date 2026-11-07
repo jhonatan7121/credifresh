@@ -21,12 +21,7 @@ SEED_ADDRESS = "Direccion ficticia para pruebas Sandbox"
 
 
 def ensure_sandbox_test_records(db, client: Cliente) -> bool:
-    """Keep the disposable sandbox user ready for repeatable payment tests.
-
-    Render's sandbox uses an ephemeral SQLite file, so each fresh instance must
-    reconstruct a complete synthetic profile and a pending quota for the
-    decline-path test. This is intentionally limited to the seeded test user.
-    """
+    """Keep only the synthetic Sandbox user and its test quotas ready."""
     changed = False
     if not client.telefono or not client.telefono.strip().isdigit() or len(client.telefono.strip()) < 7:
         client.telefono = SEED_PHONE
@@ -90,7 +85,7 @@ def main() -> None:
             linked_client = db.query(Cliente).filter(Cliente.usuario_id == existing.id).first()
             if not linked_client or not db.query(Credito).filter( Credito.cliente_id == linked_client.id).first():
                 raise SystemExit("Existing sandbox seed is incomplete; refusing to alter records.")
-            # Keep the disposable test user's password aligned with Render's secret after rotation.
+            # Keep the synthetic test user's password aligned with Render's secret after rotation.
             if not verify_password(password, existing.password_hash):
                 existing.password_hash = get_password_hash(password)
                 existing.auth_token_version += 1
