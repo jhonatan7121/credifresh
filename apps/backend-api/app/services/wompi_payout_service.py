@@ -106,6 +106,36 @@ def consultar_lote_sandbox(reference: str) -> dict:
     return {"ambiente": "sandbox", "referencia": reference, "encontrado": bool(matches), "lotes": matches}
 
 
+def consultar_lote_por_id_sandbox(payout_id: str) -> dict:
+    """Query one Wompi Sandbox payout by its provider ID; omit beneficiary details."""
+    if not _IDEMPOTENCY_RE.fullmatch(payout_id):
+        raise HTTPException(status_code=422, detail="El ID del lote contiene caracteres no permitidos.")
+    response = _request("GET", f"/payouts/{quote(payout_id, safe='')}")
+    data = response.get("data", response)
+    if isinstance(data, list):
+        data = data[0] if data and isinstance(data[0], dict) else {}
+    if isinstance(data, dict) and isinstance(data.get("payout"), dict):
+        data = data["payout"]
+    if not isinstance(data, dict):
+        data = {}
+
+    result_id = data.get("id") or data.get("payoutId") or data.get("payout_id")
+    reference = data.get("reference") or data.get("referenceId")
+    status = data.get("status") or data.get("state")
+    return {
+        "ambiente": "sandbox",
+        "encontrado": bool(result_id or reference or status),
+        "lote": {
+            "id": result_id,
+            "referencia": reference,
+            "estado": status,
+            "monto_centavos": data.get("amountInCents") or data.get("amount_in_cents"),
+            "transacciones_reportadas": data.get("totalTransactions") or data.get("total_transactions"),
+            "creado_en": data.get("createdAt") or data.get("created_at"),
+        },
+    }
+
+
 def listar_lotes_recientes_sandbox(limit: int = 10, page: int = 1) -> dict:
     """List recent Sandbox payouts with non-sensitive fields only."""
     response = _request("GET", f"/payouts?{urlencode({'limit': limit, 'page': page})}")

@@ -10,6 +10,7 @@ from app.models.usuario import Usuario
 from app.services.wompi_payout_service import (
     crear_lote_sandbox,
     consultar_lote_sandbox,
+    consultar_lote_por_id_sandbox,
     consultar_transaccion_sandbox,
     listar_lotes_recientes_sandbox,
     listar_bancos_sandbox,
@@ -61,6 +62,15 @@ def listar_lotes_recientes_pago_sandbox(
 ):
     """List recent Sandbox batches, returning no beneficiary or account details."""
     return listar_lotes_recientes_sandbox(limit=limit, page=page)
+
+
+@router.get("/lotes/id/{payout_id}")
+def consultar_lote_pago_sandbox_por_id(
+    payout_id: str,
+    _: Usuario = Depends(RoleChecker(["ADMIN"])),
+):
+    """Query one Wompi Sandbox batch by provider ID; no beneficiary data is returned."""
+    return consultar_lote_por_id_sandbox(payout_id)
 
 
 @router.get("/transactions/{reference}")
