@@ -136,6 +136,44 @@ def consultar_lote_por_id_sandbox(payout_id: str) -> dict:
     }
 
 
+def consultar_transacciones_lote_sandbox(payout_id: str) -> dict:
+    """Query transactions for one Sandbox payout; omit beneficiary details."""
+    if not _IDEMPOTENCY_RE.fullmatch(payout_id):
+        raise HTTPException(status_code=422, detail="El ID del lote contiene caracteres no permitidos.")
+    response = _request("GET", f"/payouts/{quote(payout_id, safe='')}/transactions")
+    data = response.get("data", response)
+    if isinstance(data, list):
+        records = data
+    elif isinstance(data, dict):
+        records = next(
+            (data[key] for key in ("transactions", "items", "results", "content") if isinstance(data.get(key), list)),
+            [],
+        )
+    else:
+        records = []
+
+    transactions = []
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        transaction = item.get("transaction") if isinstance(item.get("transaction"), dict) else item
+        transactions.append({
+            "id": transaction.get("id") or transaction.get("transactionId") or transaction.get("transaction_id"),
+            "reference": transaction.get("reference") or transaction.get("referenceId"),
+            "status": transaction.get("status") or transaction.get("state"),
+            "amountInCents": transaction.get("amountInCents") or transaction.get("amount_in_cents"),
+            "createdAt": transaction.get("createdAt") or transaction.get("created_at"),
+        })
+
+    return {
+        "ambiente": "sandbox",
+        "payout_id": payout_id,
+        "encontrado": bool(transactions),
+        "transacciones_reportadas": len(transactions),
+        "transacciones": transactions,
+    }
+
+
 def listar_lotes_recientes_sandbox(limit: int = 10, page: int = 1) -> dict:
     """List recent Sandbox payouts with non-sensitive fields only."""
     response = _request("GET", f"/payouts?{urlencode({'limit': limit, 'page': page})}")

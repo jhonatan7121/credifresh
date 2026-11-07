@@ -11,6 +11,7 @@ from app.services.wompi_payout_service import (
     crear_lote_sandbox,
     consultar_lote_sandbox,
     consultar_lote_por_id_sandbox,
+    consultar_transacciones_lote_sandbox,
     consultar_transaccion_sandbox,
     listar_lotes_recientes_sandbox,
     listar_bancos_sandbox,
@@ -71,6 +72,15 @@ def consultar_lote_pago_sandbox_por_id(
 ):
     """Query one Wompi Sandbox batch by provider ID; no beneficiary data is returned."""
     return consultar_lote_por_id_sandbox(payout_id)
+
+
+@router.get("/lotes/id/{payout_id}/transactions")
+def consultar_transacciones_lote_pago_sandbox(
+    payout_id: str,
+    _: Usuario = Depends(RoleChecker(["ADMIN"])),
+):
+    """Query transactions for one Wompi Sandbox batch; no beneficiary data is returned."""
+    return consultar_transacciones_lote_sandbox(payout_id)
 
 
 @router.get("/transactions/{reference}")
