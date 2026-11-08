@@ -42,7 +42,18 @@ services:
       - key: BANK_OPERATIONS_ENABLED
         value: "false"
       - key: ALLOWED_ORIGINS
-        value: https://sandbox.invalid
+        value: https://credifresh-wompi-sandbox-portal.onrender.com
+
+  - type: web
+    name: credifresh-wompi-sandbox-portal
+    runtime: static
+    rootDir: apps/admin-portal
+    buildCommand: sh render-build.sh
+    staticPublishPath: .
+    autoDeployTrigger: off
+    envVars:
+      - key: API_BASE_URL
+        value: https://credifresh-wompi-sandbox.onrender.com
 
 databases:
   - name: credifresh-wompi-sandbox-db

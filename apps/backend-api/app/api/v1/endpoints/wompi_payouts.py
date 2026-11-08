@@ -4,9 +4,14 @@ from typing import Literal
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
+from app.config.database import get_db
 from app.core.deps import RoleChecker
 from app.models.usuario import Usuario
+from app.models.wompi_desembolso import WompiDesembolsoSandbox
+from app.services import desembolso_wompi_sandbox as credit_payouts
+from app.services import wompi_payout_service as payout_service
 from app.services.wompi_payout_service import (
     crear_lote_sandbox,
     consultar_lote_sandbox,
@@ -34,6 +39,64 @@ class LoteSandbox(BaseModel):
     paymentType: Literal["OTHER"] = "OTHER"
     transactionStatus: Literal["APPROVED", "FAILED"]
     transactions: list[TransaccionSandbox] = Field(min_length=1, max_length=1)
+
+
+class DesembolsoCreditoSandbox(BaseModel):
+    accountId: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9-]+$")
+    bankId: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9-]+$")
+    transactionStatus: Literal["APPROVED", "FAILED"]
+
+
+@router.get("/catalogos")
+def catalogos_desembolso_sandbox(_: Usuario = Depends(RoleChecker(["ADMIN"]))):
+    """Expose only IDs and safe labels for the Sandbox payout form."""
+    accounts = payout_service._records_from(listar_cuentas_sandbox(),
+        collection_keys=("accounts", "items", "results", "content", "rows", "data"),
+        singular_keys=("account",), record_keys=("id", "accountId"))
+    banks = payout_service._records_from(listar_bancos_sandbox(),
+        collection_keys=("banks", "items", "results", "content", "rows", "data"),
+        singular_keys=("bank",), record_keys=("id", "bankId"))
+    safe_accounts = []
+    for index, item in enumerate(accounts, 1):
+        record = payout_service._record_from(item, ("account",), ("id", "accountId"))
+        value = payout_service._first_value(record, "id", "accountId")
+        if value:
+            safe_accounts.append({"id": str(value), "nombre": f"Cuenta de prueba {index}"})
+    safe_banks = []
+    for index, item in enumerate(banks, 1):
+        record = payout_service._record_from(item, ("bank",), ("id", "bankId"))
+        value = payout_service._first_value(record, "id", "bankId")
+        name = payout_service._first_value(record, "name", "bankName", "nombre", "code")
+        if value:
+            safe_banks.append({"id": str(value), "nombre": str(name) if name else f"Banco {index}"})
+    return {"cuentas": safe_accounts, "bancos": safe_banks}
+
+
+@router.post("/creditos/{credito_id}/desembolso", status_code=202)
+def iniciar_desembolso_credito_sandbox(
+    credito_id: int, payload: DesembolsoCreditoSandbox,
+    db: Session = Depends(get_db), actor: Usuario = Depends(RoleChecker(["ADMIN"])),
+):
+    """Create one synthetic Wompi Sandbox payout for an accepted credit."""
+    return credit_payouts.start(db, actor, credito_id, payload.accountId, payload.bankId, payload.transactionStatus)
+
+
+@router.get("/creditos/{credito_id}/desembolso")
+def consultar_desembolso_credito_sandbox(
+    credito_id: int, db: Session = Depends(get_db), _: Usuario = Depends(RoleChecker(["ADMIN"])),
+):
+    credit_payouts._sandbox_only()
+    attempt = db.query(WompiDesembolsoSandbox).filter_by(credito_id=credito_id).first()
+    if not attempt:
+        raise HTTPException(status_code=404, detail="No hay desembolso Sandbox para este crédito.")
+    return credit_payouts.summary(attempt)
+
+
+@router.post("/creditos/{credito_id}/reconciliar")
+def reconciliar_desembolso_credito_sandbox(
+    credito_id: int, db: Session = Depends(get_db), _: Usuario = Depends(RoleChecker(["ADMIN"])),
+):
+    return credit_payouts.reconcile(db, credito_id)
 
 
 @router.get("/accounts")
@@ -132,9 +195,28 @@ def crear_lote_pago_sandbox(payload: LoteSandbox, _: Usuario = Depends(RoleCheck
 async def recibir_evento_payout_sandbox(
     event: dict = Body(..., description="Evento payout.updated o transaction.updated enviado por Wompi."),
     x_event_checksum: str | None = Header(default=None, alias="X-Event-Checksum"),
+    db: Session = Depends(get_db),
 ):
     if event.get("event") not in {"payout.updated", "transaction.updated"}:
         raise HTTPException(status_code=400, detail="Tipo de evento de Pagos a Terceros no reconocido.")
     if not validar_firma_evento_payout(event, x_event_checksum):
         raise HTTPException(status_code=401, detail="La firma del evento Sandbox no es válida.")
+    data = event.get("data") or {}
+    item = data.get("payout" if event["event"] == "payout.updated" else "transaction") if isinstance(data, dict) else None
+    provider_id = (item.get("id") if event["event"] == "payout.updated" else item.get("payoutId")) if isinstance(item, dict) else None
+    attempt = None
+    if isinstance(provider_id, str) and provider_id:
+        attempt = db.query(WompiDesembolsoSandbox).filter_by(payout_id=provider_id).first()
+    # A payout webhook may arrive before POST /payouts returned its ID. Its
+    # reference is only a lookup hint; reconciliation verifies the result via
+    # Wompi's authenticated transaction endpoint, including amount/reference.
+    reference = item.get("reference") if isinstance(item, dict) and event["event"] == "payout.updated" else None
+    if not attempt and isinstance(reference, str) and reference:
+        attempt = db.query(WompiDesembolsoSandbox).filter_by(referencia_lote=reference).first()
+    if attempt:
+        try:
+            credit_payouts.reconcile(db, attempt.credito_id)
+        except HTTPException as exc:
+            db.rollback()
+            raise HTTPException(status_code=503, detail="No fue posible reconciliar el desembolso Sandbox.") from exc
     return {"recibido": True, "evento": event["event"]}

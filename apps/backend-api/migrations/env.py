@@ -16,6 +16,7 @@ from app.models.notificacion import Notificacion
 from app.models.pago import Pago
 from app.models.perfil_financiero import PerfilFinanciero
 from app.models.usuario import Usuario
+from app.models.wompi_desembolso import WompiDesembolsoSandbox  # noqa: F401
 from app.core.rate_limit import auth_rate_limit_windows  # noqa: F401
 
 # this is the Alembic Config object, which provides

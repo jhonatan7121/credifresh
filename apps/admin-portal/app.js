@@ -38,11 +38,13 @@
     CAMBIAR_ESTADO_CREDITO: "Cambiar estado de crédito",
     ACEPTAR_CONDICIONES_CREDITO: "Aceptar condiciones del crédito",
     DESEMBOLSAR_CREDITO: "Desembolsar crédito",
+    INICIAR_DESEMBOLSO_WOMPI_SANDBOX: "Iniciar desembolso de prueba",
+    DESEMBOLSO_WOMPI_SANDBOX_RECHAZADO: "Desembolso de prueba rechazado",
     DESEMBOLSO_BLOQUEADO_CONDICIONES_DESACTUALIZADAS: "Desembolso bloqueado: condiciones distintas",
     REGISTRAR_PAGO: "Registrar pago",
     LIQUIDAR_CREDITO: "Liquidar crédito",
   };
-  let cache = { users: [], clients: [], credits: [], summary: null, portfolio: null, pendingDisbursements: [], overdueInstallments: { items: [], total: 0, limit: OVERDUE_PAGE_SIZE, offset: 0 }, bankOperationsEnabled: null };
+  let cache = { users: [], clients: [], credits: [], summary: null, portfolio: null, pendingDisbursements: [], overdueInstallments: { items: [], total: 0, limit: OVERDUE_PAGE_SIZE, offset: 0 }, bankOperationsEnabled: null, sandboxPayoutEnabled: false };
 
   const $ = (id) => document.getElementById(id);
   const loginView = $("login-view");
@@ -677,6 +679,86 @@
     }
   }
 
+  function renderSandboxPayoutCredits() {
+    const panel = $("sandbox-payout-card");
+    panel.hidden = !cache.sandboxPayoutEnabled;
+    if (panel.hidden) return;
+    const select = $("sandbox-payout-credit");
+    const previous = select.value;
+    select.replaceChildren(new Option("Selecciona un crédito", ""));
+    cache.credits.filter((credit) => ["APROBADO", "DESEMBOLSADO"].includes(credit.estado)).forEach((credit) => {
+      select.add(new Option(`#${credit.id} · ${formatMoney(credit.monto)} · ${credit.estado}`, String(credit.id)));
+    });
+    if ([...select.options].some((option) => option.value === previous)) select.value = previous;
+  }
+
+  function sandboxPayoutResult(result) {
+    const messages = {
+      APROBADO: "Prueba aprobada: el crédito quedó desembolsado y se generaron sus cuotas.",
+      RECHAZADO: "Prueba rechazada: el crédito sigue pendiente y no se generaron cuotas.",
+      PENDIENTE: "Wompi aún procesa la prueba. Consulta el resultado nuevamente.",
+      ENVIANDO: "La solicitud está en curso. Consulta el resultado nuevamente.",
+      ENVIO_INCIERTO: "La respuesta de Wompi no se confirmó. Consulta el resultado; no se enviará otro lote automáticamente.",
+      REVISION_MANUAL: "Wompi confirmó la prueba, pero las condiciones del crédito requieren revisión manual.",
+    };
+    setMessage($("sandbox-payout-message"), messages[result.estado] || "Resultado aún no disponible.", result.estado === "APROBADO" ? "success" : "info");
+  }
+
+  async function loadSandboxPayoutCatalog() {
+    const button = $("sandbox-payout-catalog");
+    button.disabled = true;
+    setMessage($("sandbox-payout-message"), "Consultando opciones de Sandbox…", "info");
+    try {
+      const result = await api("/integraciones/wompi/payouts/sandbox/catalogos");
+      [["sandbox-payout-account", result.cuentas, "Selecciona una cuenta"], ["sandbox-payout-bank", result.bancos, "Selecciona un banco"]].forEach(([id, items, placeholder]) => {
+        const select = $(id);
+        select.replaceChildren(new Option(placeholder, ""));
+        (items || []).forEach((item) => select.add(new Option(item.nombre, item.id)));
+      });
+      setMessage($("sandbox-payout-message"), result.cuentas.length && result.bancos.length ? "Opciones de prueba cargadas." : "Wompi no devolvió cuentas o bancos de prueba.", "info");
+    } catch (error) {
+      setMessage($("sandbox-payout-message"), error.message || "No se pudieron cargar las opciones.");
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function runSandboxPayout(event) {
+    event.preventDefault();
+    const button = event.currentTarget.querySelector("button[type=submit]");
+    button.disabled = true;
+    setMessage($("sandbox-payout-message"), "Procesando prueba de desembolso…", "info");
+    try {
+      const creditId = $("sandbox-payout-credit").value;
+      const result = await api(`/integraciones/wompi/payouts/sandbox/creditos/${encodeURIComponent(creditId)}/desembolso`, {
+        method: "POST", body: JSON.stringify({ accountId: $("sandbox-payout-account").value, bankId: $("sandbox-payout-bank").value, transactionStatus: $("sandbox-payout-result").value }),
+      });
+      await loadDashboard();
+      sandboxPayoutResult(result);
+    } catch (error) {
+      setMessage($("sandbox-payout-message"), error.message || "No se pudo iniciar la prueba.");
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function reconcileSandboxPayout() {
+    const creditId = $("sandbox-payout-credit").value;
+    if (!creditId) { setMessage($("sandbox-payout-message"), "Selecciona un crédito."); return; }
+    const button = $("sandbox-payout-reconcile");
+    button.disabled = true;
+    setMessage($("sandbox-payout-message"), "Consultando resultado en Wompi…", "info");
+    try {
+      const result = await api(`/integraciones/wompi/payouts/sandbox/creditos/${encodeURIComponent(creditId)}/reconciliar`, { method: "POST" });
+      await loadDashboard();
+      sandboxPayoutResult(result);
+    } catch (error) {
+      setMessage($("sandbox-payout-message"), error.message || "No se pudo consultar el resultado.");
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   function renderOverdueInstallments(error = "") {
     const page = cache.overdueInstallments;
     const installments = page.items || [];
@@ -1195,8 +1277,10 @@
     });
     if (results[7].status === "fulfilled") {
       cache.bankOperationsEnabled = results[7].value.operaciones_bancarias_habilitadas;
+      cache.sandboxPayoutEnabled = results[7].value.desembolsos_wompi_sandbox === true;
     } else {
       cache.bankOperationsEnabled = null;
+      cache.sandboxPayoutEnabled = false;
       failures.push(results[7].reason.message);
     }
     pendingDisbursementLoadError = results[5].status === "rejected" ? results[5].reason.message : "";
@@ -1211,7 +1295,7 @@
     $("service-status-icon").textContent = apiIsHealthy ? "✓" : "!";
     $("service-status-title").textContent = apiIsHealthy ? "Servicios disponibles" : "Conexión no disponible";
     $("service-status-description").textContent = apiIsHealthy
-      ? "La API y la base de datos responden. Las solicitudes nuevas quedan pendientes; este panel no las aprueba ni desembolsa."
+      ? (cache.sandboxPayoutEnabled ? "La API y la base de datos responden. Las pruebas de desembolso usan Sandbox." : "La API y la base de datos responden. Las solicitudes nuevas quedan pendientes; este panel no las aprueba ni desembolsa.")
       : "No se pudo confirmar la conexión con la API y la base de datos. Actualiza los datos para volver a comprobarla.";
     $("service-status-pill").className = `status-pill ${apiIsHealthy ? "status-enabled" : "status-waiting"}`;
     $("service-status-pill").textContent = apiIsHealthy ? "Operativo" : "Sin conexión";
@@ -1242,6 +1326,7 @@
     renderPendingDisbursements(pendingDisbursementLoadError);
     renderOverdueInstallments(overdueInstallmentsLoadError);
     renderBankOperationsStatus();
+    renderSandboxPayoutCredits();
     setMessage(globalMessage, failures.length ? "Algunos datos no pudieron cargarse. Usa Actualizar datos para volver a intentarlo." : "Información actualizada.", failures.length ? "info" : "success");
   }
 
@@ -1526,6 +1611,9 @@
   $("refresh-button").addEventListener("click", loadDashboard);
   $("pending-disbursement-search").addEventListener("input", () => renderPendingDisbursements(pendingDisbursementLoadError));
   $("pending-disbursement-export-button").addEventListener("click", exportPendingDisbursementsCsv);
+  $("sandbox-payout-catalog").addEventListener("click", loadSandboxPayoutCatalog);
+  $("sandbox-payout-form").addEventListener("submit", runSandboxPayout);
+  $("sandbox-payout-reconcile").addEventListener("click", reconcileSandboxPayout);
   $("overdue-previous-button").addEventListener("click", () => loadOverdueInstallments(Math.max(0, overdueOffset - OVERDUE_PAGE_SIZE)));
   $("overdue-next-button").addEventListener("click", () => loadOverdueInstallments(overdueOffset + OVERDUE_PAGE_SIZE));
   $("overdue-export-button").addEventListener("click", exportOverdueInstallmentsCsv);

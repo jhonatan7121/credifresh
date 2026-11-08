@@ -87,6 +87,20 @@
             <div id="pending-disbursement-table" class="table-wrap"></div>
             <p class="form-note">Esta lista es informativa y no ejecuta desembolsos. Confirma la transferencia y la recepción de fondos antes de registrar un pago.</p>
           </section>
+          <section id="sandbox-payout-card" class="content-card" aria-labelledby="sandbox-payout-title" hidden>
+            <div class="card-heading"><div><h3 id="sandbox-payout-title">Prueba de desembolso Wompi</h3><p>Sandbox: beneficiario ficticio y sin dinero real.</p></div></div>
+            <p class="form-note">Selecciona un crédito aprobado con condiciones aceptadas. El límite por prueba es $100.000 COP. Para simular otro resultado, usa otro crédito de prueba.</p>
+            <form id="sandbox-payout-form" class="stack">
+              <label for="sandbox-payout-credit">Crédito</label><select id="sandbox-payout-credit" required></select>
+              <button id="sandbox-payout-catalog" class="button button-secondary" type="button">Cargar cuentas y bancos de prueba</button>
+              <label for="sandbox-payout-account">Cuenta de origen de prueba</label><select id="sandbox-payout-account" required><option value="">Carga las opciones</option></select>
+              <label for="sandbox-payout-bank">Banco de prueba</label><select id="sandbox-payout-bank" required><option value="">Carga las opciones</option></select>
+              <label for="sandbox-payout-result">Resultado a simular</label><select id="sandbox-payout-result"><option value="APPROVED">Aprobado</option><option value="FAILED">Rechazado</option></select>
+              <button class="button button-primary" type="submit">Simular desembolso</button>
+              <button id="sandbox-payout-reconcile" class="button button-secondary" type="button">Consultar resultado en Wompi</button>
+            </form>
+            <p id="sandbox-payout-message" class="message" role="status" aria-live="polite"></p>
+          </section>
           <section class="content-card" aria-labelledby="overdue-installments-title">
             <div class="card-heading"><div><h3 id="overdue-installments-title">Seguimiento de cuotas vencidas</h3><p>Cuotas pendientes de créditos desembolsados, ordenadas desde el vencimiento más antiguo.</p></div><button id="overdue-export-button" class="button button-secondary" type="button" disabled>Exportar CSV</button></div>
             <p id="overdue-installments-message" class="message" role="status" aria-live="polite"></p>

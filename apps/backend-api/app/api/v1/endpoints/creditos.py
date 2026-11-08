@@ -222,6 +222,10 @@ def obtener_estado_operaciones(
     return {
         "operaciones_bancarias_habilitadas": BANK_OPERATIONS_ENABLED,
         "modo_simulacion": SIMULATION_MODE,
+        "desembolsos_wompi_sandbox": (
+            os.getenv("ENVIRONMENT", "").strip().lower() == "sandbox"
+            and os.getenv("WOMPI_PAYOUT_ENVIRONMENT", "").strip().lower() == "sandbox"
+        ),
         "mensaje": "No se mueve dinero real." if SIMULATION_MODE else None,
     }
 
@@ -991,6 +995,13 @@ def desembolsar_credito_endpoint(
     current_user: Usuario = Depends(RoleChecker(["GESTOR", "ADMIN"]))
 ):
     require_bank_operations_enabled(db, current_user, "DESEMBOLSAR_CREDITO", credito_id)
+    if os.getenv("ENVIRONMENT", "").strip().lower() == "sandbox" and os.getenv("WOMPI_PAYOUT_ENVIRONMENT", "").strip().lower() == "sandbox":
+        raise HTTPException(status_code=409, detail="En Sandbox usa el desembolso de prueba de Wompi para este crédito.")
+    return finalizar_desembolso_confirmado(credito_id, db, current_user)
+
+
+def finalizar_desembolso_confirmado(credito_id: int, db: Session, current_user: Usuario, on_success=None):
+    """Persist a disbursement after the caller has verified the external result."""
     # Bloqueo pesimista con with_for_update() para evitar condiciones de carrera concurrentes
     credito = (
         db.query(Credito)
@@ -1121,6 +1132,8 @@ def desembolsar_credito_endpoint(
                 credito_id=credito.id
             )
 
+        if on_success:
+            on_success()
         db.commit()
         db.refresh(credito)
     except HTTPException:

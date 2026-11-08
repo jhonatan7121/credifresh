@@ -26,6 +26,7 @@ EXPECTED_TABLES = {
     "perfiles_financieros",
     "usuarios",
     "wompi_pagos",
+    "wompi_desembolsos_sandbox",
 }
 
 
@@ -60,6 +61,12 @@ class InitialMigrationTests(unittest.TestCase):
                         "SELECT name FROM sqlite_master WHERE type = 'table'"
                     )
                 }
+                payout_indexes = {
+                    row[1]: row[2]
+                    for row in connection.execute("PRAGMA index_list('wompi_desembolsos_sandbox')")
+                }
+                self.assertEqual(payout_indexes.get("ix_wompi_desembolsos_sandbox_credito_id"), 1)
+                self.assertEqual(payout_indexes.get("ix_wompi_desembolsos_sandbox_payout_id"), 1)
             finally:
                 connection.close()
 
