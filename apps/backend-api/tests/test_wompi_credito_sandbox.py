@@ -26,21 +26,21 @@ def sandbox(monkeypatch):
     monkeypatch.setenv("WOMPI_PAYOUT_EVENTS_SECRET", "test_events_example")
 
 
-def accepted_credit():
+def accepted_credit(amount=Decimal("100000.00")):
     db = TestSessionLocal()
     try:
         actor = db.query(Usuario).filter_by(email="bypass_admin@credifresh.com").one()
         customer = Cliente(nombre="Cliente ficticio", cedula=uuid4().hex[:12], telefono="3000000000")
         db.add(customer)
         db.flush()
-        credit = Credito(cliente_id=customer.id, monto=Decimal("100000.00"), plazo_meses=1,
+        credit = Credito(cliente_id=customer.id, monto=amount, plazo_meses=1,
                           tasa_interes=Decimal("0.00"), estado="APROBADO")
         db.add(credit)
         db.flush()
-        db.add(Evaluacion(credito_id=credit.id, decision="APROBADO", cuota_mensual=Decimal("100000.00"), motivos="Prueba"))
+        db.add(Evaluacion(credito_id=credit.id, decision="APROBADO", cuota_mensual=amount, motivos="Prueba"))
         db.add(AceptacionCredito(credito_id=credit.id, cliente_id=customer.id, usuario_id=actor.id,
-                                monto=Decimal("100000.00"), plazo_meses=1, tasa_interes=Decimal("0.00"),
-                                cuota_mensual=Decimal("100000.00"), total_estimado=Decimal("100000.00"),
+                                monto=amount, plazo_meses=1, tasa_interes=Decimal("0.00"),
+                                cuota_mensual=amount, total_estimado=amount,
                                 condiciones_version="1.0"))
         db.commit()
         return credit.id
@@ -225,3 +225,16 @@ def test_formulario_de_pruebas_solo_se_anuncia_en_sandbox(client, sandbox, monke
     assert client.get('/creditos/estado-operaciones').json()['desembolsos_wompi_sandbox'] is True
     monkeypatch.setenv('ENVIRONMENT', 'production')
     assert client.get('/creditos/estado-operaciones').json()['desembolsos_wompi_sandbox'] is False
+
+
+def test_rango_de_solicitudes_de_la_app_en_sandbox(client, sandbox, monkeypatch):
+    good = accepted_credit(Decimal("500000.00"))
+    too_large = accepted_credit(Decimal("1500000.01"))
+    calls = []
+    monkeypatch.setattr(wompi, "crear_lote_sandbox", lambda body, ref: calls.append(body) or {"data": {"id": "payout-range"}})
+    monkeypatch.setattr(wompi, "consultar_transaccion_sandbox", lambda ref: {"transacciones": []})
+    base = "/integraciones/wompi/payouts/sandbox/creditos"
+    assert client.post(f"{base}/{good}/desembolso", json=payload()).status_code == 202
+    assert calls[0]["transactions"][0]["amount"] == 50000000
+    assert client.post(f"{base}/{too_large}/desembolso", json=payload()).status_code == 422
+    assert len(calls) == 1

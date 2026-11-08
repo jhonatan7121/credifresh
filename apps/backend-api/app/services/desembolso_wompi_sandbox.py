@@ -69,8 +69,8 @@ def start(db: Session, actor: Usuario, credito_id: int, account_id: str, bank_id
     if existing:
         return summary(existing)
     cents = Decimal(str(credit.monto)) * 100
-    if cents != cents.to_integral_value() or cents <= 0 or cents > 10_000_000:
-        raise HTTPException(status_code=422, detail="El monto de prueba debe ser positivo y no superar $100.000 COP.")
+    if cents != cents.to_integral_value() or cents <= 0 or cents > 150_000_000:
+        raise HTTPException(status_code=422, detail="El monto de prueba debe ser positivo y no superar $1.500.000 COP.")
     identifier = uuid4().hex
     attempt = WompiDesembolsoSandbox(
         credito_id=credit.id, usuario_id=actor.id, referencia_lote=f"CF-SBX-{identifier}",

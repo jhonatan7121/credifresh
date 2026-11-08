@@ -52,7 +52,7 @@ El endpoint de lotes acepta solo una transacción sintética, estado explícito 
 
 ### Desembolso de un crédito ficticio
 
-El portal Sandbox ofrece la sección **Prueba de desembolso Wompi**. El administrador selecciona un crédito aprobado con condiciones aceptadas, carga cuentas y bancos de prueba y elige resultado aprobado o rechazado. Los datos enviados al beneficiario son fijos y sintéticos; el monto proviene del crédito y está limitado a $100.000 COP.
+El portal Sandbox ofrece la sección **Prueba de desembolso Wompi**. El administrador selecciona un crédito aprobado con condiciones aceptadas, carga cuentas y bancos de prueba y elige resultado aprobado o rechazado. Los datos enviados al beneficiario son fijos y sintéticos; el monto proviene del crédito y está limitado a $1.500.000 COP.
 
 También se puede usar `POST /integraciones/wompi/payouts/sandbox/creditos/{credito_id}/desembolso` con `accountId`, `bankId` y `transactionStatus` (`APPROVED` o `FAILED`). La API guarda una referencia única antes de llamar a Wompi y no vuelve a enviar automáticamente si el resultado es incierto. Para consultar el resultado confirmado se puede llamar `POST /integraciones/wompi/payouts/sandbox/creditos/{credito_id}/reconciliar`.
 
