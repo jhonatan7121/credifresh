@@ -61,7 +61,14 @@ def catalogos_desembolso_sandbox(_: Usuario = Depends(RoleChecker(["ADMIN"]))):
         record = payout_service._record_from(item, ("account",), ("id", "accountId"))
         value = payout_service._first_value(record, "id", "accountId")
         if value:
-            safe_accounts.append({"id": str(value), "nombre": f"Cuenta de prueba {index}"})
+            # Only expose the available Sandbox balance, never account numbers
+            # or beneficiary/account metadata from Wompi's response.
+            balance = payout_service._first_value(record, "balanceInCents", "balance_in_cents")
+            safe_accounts.append({
+                "id": str(value),
+                "nombre": f"Cuenta de prueba {index}",
+                "saldo_centavos": int(balance) if balance is not None else None,
+            })
     safe_banks = []
     for index, item in enumerate(banks, 1):
         record = payout_service._record_from(item, ("bank",), ("id", "bankId"))

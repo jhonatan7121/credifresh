@@ -713,7 +713,12 @@
       [["sandbox-payout-account", result.cuentas, "Selecciona una cuenta"], ["sandbox-payout-bank", result.bancos, "Selecciona un banco"]].forEach(([id, items, placeholder]) => {
         const select = $(id);
         select.replaceChildren(new Option(placeholder, ""));
-        (items || []).forEach((item) => select.add(new Option(item.nombre, item.id)));
+        (items || []).forEach((item) => {
+          const label = id === "sandbox-payout-account"
+            ? `${item.nombre} · saldo Sandbox ${Number.isInteger(item.saldo_centavos) ? formatMoney(item.saldo_centavos / 100) : "no informado"}`
+            : item.nombre;
+          select.add(new Option(label, item.id));
+        });
       });
       setMessage($("sandbox-payout-message"), result.cuentas.length && result.bancos.length ? "Opciones de prueba cargadas." : "Wompi no devolvió cuentas o bancos de prueba.", "info");
     } catch (error) {

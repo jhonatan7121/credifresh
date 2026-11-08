@@ -20,7 +20,7 @@ services:
       - key: ENVIRONMENT
         value: sandbox
       - key: CREDIFRESH_SANDBOX_RELEASE
-        value: credit-payout-v2
+        value: wompi-sandbox-diagnostics-v1
       - key: WOMPI_ENVIRONMENT
         value: sandbox
       - key: WOMPI_PRIVATE_KEY
@@ -57,7 +57,7 @@ services:
       - key: API_BASE_URL
         value: https://credifresh-wompi-sandbox.onrender.com
       - key: CREDIFRESH_SANDBOX_RELEASE
-        value: credit-payout-v2
+        value: wompi-sandbox-diagnostics-v1
 
 databases:
   - name: credifresh-wompi-sandbox-db

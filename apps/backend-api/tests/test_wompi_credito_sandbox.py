@@ -136,6 +136,32 @@ def test_envio_incierto_no_repite_y_puede_reconciliarse(client, sandbox, monkeyp
     assert credit_state(credit_id) == ("DESEMBOLSADO", 1)
 
 
+def test_reconciliar_lote_aceptado_sin_id_en_respuesta_post(client, sandbox, monkeypatch):
+    credit_id = accepted_credit()
+    references = {}
+
+    def create(body, _reference):
+        references["transaction"] = body["transactions"][0]["reference"]
+        return {"data": {}}
+
+    monkeypatch.setattr(wompi, "crear_lote_sandbox", create)
+    monkeypatch.setattr(wompi, "consultar_transaccion_sandbox", lambda _reference: {"transacciones": []})
+    monkeypatch.setattr(wompi, "consultar_lote_sandbox", lambda reference: {
+        "lotes": [{"id": "payout-found", "reference": reference}],
+    })
+    monkeypatch.setattr(wompi, "consultar_transacciones_lote_sandbox", lambda payout_id: {
+        "transacciones": [{"reference": references["transaction"], "amountInCents": 10000000,
+                           "status": "APPROVED"}],
+    } if payout_id == "payout-found" else {"transacciones": []})
+    response = client.post(
+        f"/integraciones/wompi/payouts/sandbox/creditos/{credit_id}/desembolso",
+        json=payload(),
+    )
+    assert response.status_code == 202, response.text
+    assert response.json()["estado"] == "APROBADO"
+    assert credit_state(credit_id) == ("DESEMBOLSADO", 1)
+
+
 def test_monto_incorrecto_no_desembolsa_y_produccion_bloqueada(client, sandbox, monkeypatch):
     credit_id = accepted_credit()
     monkeypatch.setattr(wompi, "crear_lote_sandbox", lambda *_: {"data": {"id": "payout-mismatch"}})
@@ -216,7 +242,7 @@ def test_catalogos_no_devuelven_datos_de_cuenta(client, sandbox, monkeypatch):
         {"id": "bank-test", "name": "Banco de prueba"}]}})
     response = client.get("/integraciones/wompi/payouts/sandbox/catalogos")
     assert response.status_code == 200
-    assert response.json() == {"cuentas": [{"id": "account-test", "nombre": "Cuenta de prueba 1"}],
+    assert response.json() == {"cuentas": [{"id": "account-test", "nombre": "Cuenta de prueba 1", "saldo_centavos": 1000000}],
                                "bancos": [{"id": "bank-test", "nombre": "Banco de prueba"}]}
     assert "1234567890" not in response.text
 

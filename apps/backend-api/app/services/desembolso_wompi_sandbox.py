@@ -137,7 +137,25 @@ def reconcile(db: Session, credito_id: int) -> dict:
     provider = wompi.consultar_transaccion_sandbox(reference)
     matches = provider.get("transacciones", [])
     if len(matches) != 1:
-        return summary(attempt)
+        # The batch may be accepted before Wompi publishes its individual
+        # transaction. Search by our exact stored reference, then query the
+        # matched batch details instead of ever resending the payout.
+        batch_response = wompi.consultar_lote_sandbox(attempt.referencia_lote)
+        batches = [item for item in batch_response.get("lotes", [])
+                   if item.get("reference") == attempt.referencia_lote]
+        if len(batches) != 1:
+            return summary(attempt)
+        batch_id = batches[0].get("id")
+        if not batch_id:
+            return summary(attempt)
+        attempt.payout_id = str(batch_id)
+        attempt.estado = "PENDIENTE"
+        db.commit()
+        transaction_response = wompi.consultar_transacciones_lote_sandbox(str(batch_id))
+        matches = [item for item in transaction_response.get("transacciones", [])
+                   if item.get("reference") == reference]
+        if len(matches) != 1:
+            return summary(attempt)
     transaction = matches[0]
     if transaction.get("reference") != reference or transaction.get("amountInCents") != expected:
         raise HTTPException(status_code=409, detail="El resultado de Wompi no coincide con la referencia y el monto esperados.")
