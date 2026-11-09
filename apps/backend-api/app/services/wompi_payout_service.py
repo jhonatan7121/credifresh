@@ -16,6 +16,7 @@ from fastapi import HTTPException
 SANDBOX_API_BASE = "https://api.sandbox.payouts.wompi.co/v1"
 logger = logging.getLogger(__name__)
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+_SAFE_PAYOUT_ERROR_CODES = frozenset({"EXC_001", "EXC_002", "EXC_008", "EXC_017", "EXC_018", "EXC_019", "EXC_022"})
 _RESPONSE_ENVELOPE_KEYS = ("data", "result", "response", "payload", "_embedded")
 _COLLECTION_KEYS = ("payouts", "transactions", "items", "results", "content", "records", "rows", "data")
 
@@ -125,6 +126,15 @@ def _request(method: str, path: str, *, payload: dict | None = None, idempotency
     except urllib.error.HTTPError as exc:
         if method == "POST" and path == "/payouts":
             logger.warning("Wompi Sandbox payout creation returned HTTP %d", exc.code)
+            # Keep only documented error codes; provider messages can contain
+            # beneficiary information and must never be written to logs.
+            try:
+                error_body = json.loads(exc.read(4096).decode("utf-8"))
+                error_code = error_body.get("code") if isinstance(error_body, dict) else None
+                if isinstance(error_code, str) and error_code in _SAFE_PAYOUT_ERROR_CODES:
+                    logger.warning("Wompi Sandbox payout error code: %s", error_code)
+            except (OSError, UnicodeDecodeError, ValueError):
+                pass
         raise HTTPException(status_code=502, detail=f"Wompi Sandbox rechazó la solicitud (HTTP {exc.code}).") from exc
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
         if method == "POST" and path == "/payouts":
