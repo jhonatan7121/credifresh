@@ -58,7 +58,7 @@ def credit_state(credito_id):
 
 
 def payload(status="APPROVED"):
-    return {"accountId": "sandbox-account", "bankId": "sandbox-bank", "transactionStatus": status}
+    return {"accountId": "sandbox_account", "bankId": "sandbox-bank", "transactionStatus": status}
 
 
 def test_aprobado_una_sola_vez_y_sin_datos_reales(client, sandbox, monkeypatch):

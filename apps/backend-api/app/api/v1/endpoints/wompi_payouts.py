@@ -42,7 +42,7 @@ class LoteSandbox(BaseModel):
 
 
 class DesembolsoCreditoSandbox(BaseModel):
-    accountId: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9-]+$")
+    accountId: str = Field(min_length=1, max_length=100)
     bankId: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9-]+$")
     transactionStatus: Literal["APPROVED", "FAILED"]
 
