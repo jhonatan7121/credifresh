@@ -77,7 +77,7 @@ def start(db: Session, actor: Usuario, credito_id: int, account_id: str, bank_id
     identifier = uuid4().hex
     attempt = WompiDesembolsoSandbox(
         credito_id=credit.id, usuario_id=actor.id, referencia_lote=f"CF-SBX-{identifier}",
-        referencia_transaccion=f"CF-SBX-TX-{identifier}", monto_centavos=int(cents), estado="ENVIANDO",
+        referencia_transaccion=f"TX-{identifier}", monto_centavos=int(cents), estado="ENVIANDO",
     )
     db.add(attempt)
     registrar_auditoria(db, actor, "INICIAR_DESEMBOLSO_WOMPI_SANDBOX", "credito", credit.id,

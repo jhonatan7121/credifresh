@@ -17,6 +17,7 @@ SANDBOX_API_BASE = "https://api.sandbox.payouts.wompi.co/v1"
 logger = logging.getLogger(__name__)
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 _SAFE_PAYOUT_ERROR_CODES = frozenset({"EXC_001", "EXC_002", "EXC_008", "EXC_017", "EXC_018", "EXC_019", "EXC_022"})
+_SAFE_PAYOUT_FIELDS = ("reference", "accountId", "paymentType", "transactionStatus", "legalIdType", "legalId", "bankId", "accountType", "accountNumber", "name", "email", "amount")
 _RESPONSE_ENVELOPE_KEYS = ("data", "result", "response", "payload", "_embedded")
 _COLLECTION_KEYS = ("payouts", "transactions", "items", "results", "content", "records", "rows", "data")
 
@@ -133,6 +134,11 @@ def _request(method: str, path: str, *, payload: dict | None = None, idempotency
                 error_code = error_body.get("code") if isinstance(error_body, dict) else None
                 if isinstance(error_code, str) and error_code in _SAFE_PAYOUT_ERROR_CODES:
                     logger.warning("Wompi Sandbox payout error code: %s", error_code)
+                # Log fixed field names only, never provider-supplied text or values.
+                text = json.dumps(error_body, ensure_ascii=True)
+                fields = [field for field in _SAFE_PAYOUT_FIELDS if re.search(r"(?<![A-Za-z0-9_])" + re.escape(field) + r"(?![A-Za-z0-9_])", text, re.IGNORECASE)]
+                if fields:
+                    logger.warning("Wompi Sandbox response mentioned fields: %s", ", ".join(fields))
             except (OSError, UnicodeDecodeError, ValueError):
                 pass
         raise HTTPException(status_code=502, detail=f"Wompi Sandbox rechazó la solicitud (HTTP {exc.code}).") from exc

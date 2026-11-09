@@ -77,6 +77,7 @@ def test_aprobado_una_sola_vez_y_sin_datos_reales(client, sandbox, monkeypatch):
     assert credit_state(credit_id) == ("DESEMBOLSADO", 1)
     assert calls[0][0]["transactions"][0]["name"] == "Cliente Sandbox"
     assert calls[0][0]["transactions"][0]["accountNumber"] == "00000000"
+    assert len(calls[0][0]["transactions"][0]["reference"]) <= 40
     assert client.post(url, json=payload()).json()["estado"] == "APROBADO"
     assert client.post(f"/integraciones/wompi/payouts/sandbox/creditos/{credit_id}/reconciliar").json()["estado"] == "APROBADO"
     assert len(calls) == 1

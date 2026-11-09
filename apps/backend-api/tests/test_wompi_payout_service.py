@@ -111,6 +111,22 @@ def test_payout_never_logs_unrecognized_provider_code(monkeypatch, caplog):
     assert "private-code-value" not in caplog.text
 
 
+def test_payout_logs_only_allowed_field_names_from_validation_error(monkeypatch, caplog):
+    set_sandbox(monkeypatch)
+
+    def fail(request, timeout):
+        body = BytesIO(json.dumps({"message": "reference too long", "secret": "private-test-value"}).encode())
+        raise payouts.urllib.error.HTTPError(request.full_url, 400, "bad request", {}, body)
+
+    monkeypatch.setattr(payouts.urllib.request, "urlopen", fail)
+    with pytest.raises(HTTPException):
+        payouts.crear_lote_sandbox({"transactionStatus": "APPROVED"}, "test-reference")
+    assert "payout error code" not in caplog.text
+    assert "response mentioned fields: reference" in caplog.text
+    assert "private-test-value" not in caplog.text
+    assert "reference too long" not in caplog.text
+
+
 def test_payout_service_fails_closed_outside_sandbox(monkeypatch):
     set_sandbox(monkeypatch)
     monkeypatch.setenv("ENVIRONMENT", "production")
