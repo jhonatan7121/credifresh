@@ -1,5 +1,6 @@
 """Credit disbursement reconciliation for the isolated Wompi Sandbox only."""
 import datetime
+import logging
 from decimal import Decimal
 from uuid import uuid4
 
@@ -16,6 +17,8 @@ from app.models.wompi_desembolso import WompiDesembolsoSandbox
 from app.services import wompi_payout_service as wompi
 from modules.audit.audit_service import registrar_auditoria
 from modules.creditos.amortizacion_service import generar_plan_amortizacion
+
+logger = logging.getLogger(__name__)
 
 
 def _sandbox_only():
@@ -102,6 +105,8 @@ def start(db: Session, actor: Usuario, credito_id: int, account_id: str, bank_id
         response = wompi.crear_lote_sandbox(payload, attempt.referencia_lote)
         record = wompi._record_from(response, singular_keys=("payout",), record_keys=("id", "payoutId", "payout_id"))
         provider_id = wompi._first_value(record, "id", "payoutId", "payout_id")
+        if not provider_id:
+            logger.warning("Wompi Sandbox payout creation returned no payout identifier")
         # A webhook can arrive before POST returns. Reload under lock so that
         # its terminal decision cannot be overwritten by this response.
         attempt = (db.query(WompiDesembolsoSandbox).filter_by(credito_id=credito_id)

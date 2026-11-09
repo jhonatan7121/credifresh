@@ -55,6 +55,34 @@ def test_create_payout_uses_sandbox_headers_and_idempotency(monkeypatch):
     assert result["data"]["id"] == "sandbox-payout-id"
 
 
+def test_payout_http_failure_logs_status_without_error_details(monkeypatch, caplog):
+    set_sandbox(monkeypatch)
+
+    def fail(request, timeout):
+        raise payouts.urllib.error.HTTPError(request.full_url, 400, "private-error-data", {}, None)
+
+    monkeypatch.setattr(payouts.urllib.request, "urlopen", fail)
+    with pytest.raises(HTTPException):
+        payouts.crear_lote_sandbox({"transactionStatus": "APPROVED"}, "test-reference")
+    assert "payout creation returned HTTP 400" in caplog.text
+    assert "private-error-data" not in caplog.text
+    assert "sandbox-api-key-for-test" not in caplog.text
+    assert "sandbox-principal-for-test" not in caplog.text
+
+
+def test_payout_connection_failure_logs_type_without_details(monkeypatch, caplog):
+    set_sandbox(monkeypatch)
+
+    def fail(request, timeout):
+        raise TimeoutError("private-error-data")
+
+    monkeypatch.setattr(payouts.urllib.request, "urlopen", fail)
+    with pytest.raises(HTTPException):
+        payouts.crear_lote_sandbox({"transactionStatus": "APPROVED"}, "test-reference")
+    assert "payout creation failed: TimeoutError" in caplog.text
+    assert "private-error-data" not in caplog.text
+
+
 def test_payout_service_fails_closed_outside_sandbox(monkeypatch):
     set_sandbox(monkeypatch)
     monkeypatch.setenv("ENVIRONMENT", "production")

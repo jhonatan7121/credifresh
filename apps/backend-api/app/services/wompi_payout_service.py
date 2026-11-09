@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import urllib.error
@@ -13,6 +14,7 @@ from urllib.parse import quote
 from fastapi import HTTPException
 
 SANDBOX_API_BASE = "https://api.sandbox.payouts.wompi.co/v1"
+logger = logging.getLogger(__name__)
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 _RESPONSE_ENVELOPE_KEYS = ("data", "result", "response", "payload", "_embedded")
 _COLLECTION_KEYS = ("payouts", "transactions", "items", "results", "content", "records", "rows", "data")
@@ -121,10 +123,16 @@ def _request(method: str, path: str, *, payload: dict | None = None, idempotency
         with urllib.request.urlopen(request, timeout=20) as response:
             body = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
+        if method == "POST" and path == "/payouts":
+            logger.warning("Wompi Sandbox payout creation returned HTTP %d", exc.code)
         raise HTTPException(status_code=502, detail=f"Wompi Sandbox rechazó la solicitud (HTTP {exc.code}).") from exc
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        if method == "POST" and path == "/payouts":
+            logger.warning("Wompi Sandbox payout creation failed: %s", type(exc).__name__)
         raise HTTPException(status_code=502, detail="No fue posible conectar con Wompi Sandbox.") from exc
     if not isinstance(body, dict):
+        if method == "POST" and path == "/payouts":
+            logger.warning("Wompi Sandbox payout creation returned a non-object response")
         raise HTTPException(status_code=502, detail="Wompi Sandbox respondió con un formato inesperado.")
     return body
 
