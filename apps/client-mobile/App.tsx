@@ -78,11 +78,13 @@ function rateLabel(rate: number | string) {
 }
 
 function installmentBalance(installment: Loan["cuotas"][number]) {
-  return Math.max(0, Number(installment.monto_cuota) - Number(installment.monto_pagado));
+  const amountCents = Math.round(Number(installment.monto_cuota) * 100);
+  const paidCents = Math.round(Number(installment.monto_pagado) * 100);
+  return Math.max(0, amountCents - paidCents) / 100;
 }
 
 function loanBalance(loan: Loan) {
-  return loan.cuotas.reduce((balance, installment) => balance + installmentBalance(installment), 0);
+  return loan.cuotas.reduce((cents, installment) => cents + Math.round(installmentBalance(installment) * 100), 0) / 100;
 }
 
 function nextInstallment(loan: Loan) {
@@ -118,10 +120,10 @@ function installmentStatusLabel(installment: Loan["cuotas"][number]) {
 }
 
 function overdueBalance(loan: Loan) {
-  return loan.cuotas.reduce((balance, installment) => {
+  return loan.cuotas.reduce((cents, installment) => {
     const days = daysUntilDue(installment.fecha_vencimiento);
-    return days != null && days < 0 ? balance + installmentBalance(installment) : balance;
-  }, 0);
+    return days != null && days < 0 ? cents + Math.round(installmentBalance(installment) * 100) : cents;
+  }, 0) / 100;
 }
 
 function overdueInstallmentCount(loan: Loan) {
@@ -594,7 +596,7 @@ export default function App() {
 
     Alert.alert(
       "Pago de prueba",
-      `Se abrirá Wompi Sandbox por ${currency(installmentBalance(installment))}. No se moverá dinero real.`,
+      `Se abrirá Wompi Sandbox por ${quoteCurrency(installmentBalance(installment))}. No se moverá dinero real.`,
       [
         { text: "Cancelar", style: "cancel" },
         {
@@ -1121,15 +1123,15 @@ export default function App() {
                 <Text style={styles.bodyText}>{loan.credito.plazo_meses} meses · {rateLabel(loan.credito.tasa_interes)}</Text>
                 {loan.cuotas.length > 0 ? (
                   <View style={styles.loanRepaymentSummary}>
-                    <InfoRow label="Saldo pendiente" value={currency(loanBalance(loan))} />
+                    <InfoRow label="Saldo pendiente" value={quoteCurrency(loanBalance(loan))} />
                     {nextInstallment(loan) ? <InfoRow label="Próximo vencimiento" value={dateLabel(nextInstallment(loan)!.fecha_vencimiento)} /> : null}
-                    {overdueBalance(loan) > 0 ? <InfoRow label="Saldo vencido" value={currency(overdueBalance(loan))} /> : null}
+                    {overdueBalance(loan) > 0 ? <InfoRow label="Saldo vencido" value={quoteCurrency(overdueBalance(loan))} /> : null}
                   </View>
                 ) : null}
                 <Text style={styles.link}>Ver detalle →</Text>
               </Pressable>
             ))}
-            <Text style={styles.footerNote}>{isWompiSandboxApi ? "Los pagos de prueba están disponibles en Wompi Sandbox. No se mueve dinero real; los desembolsos siguen deshabilitados." : "El desembolso y los pagos siguen deshabilitados en este ambiente."}</Text>
+            <Text style={styles.footerNote}>{isWompiSandboxApi ? "Los pagos y desembolsos de prueba utilizan Wompi Sandbox. No se mueve dinero real." : "El desembolso y los pagos siguen deshabilitados en este ambiente."}</Text>
           </>
         )}
       </ScrollView>
@@ -1174,7 +1176,7 @@ function LoanDetail({
         {loan.total_estimado != null ? <InfoRow label="Total estimado" value={quoteCurrency(loan.total_estimado)} /> : null}
       </View>
       {accepted ? (
-        <View style={styles.notice}><Text style={styles.noticeTitle}>Condiciones aceptadas</Text><Text style={styles.bodyText}>El crédito sigue pendiente de desembolso. Aceptar las condiciones no significa que el dinero haya sido transferido.</Text></View>
+        <View style={styles.notice}><Text style={styles.noticeTitle}>Condiciones aceptadas</Text><Text style={styles.bodyText}>{approved ? "El crédito está pendiente de desembolso. Aceptar las condiciones no significa que el dinero haya sido transferido." : loan.credito.estado === "DESEMBOLSADO" ? (sandboxPaymentsEnabled ? "El desembolso de prueba quedó registrado en Sandbox. Consulta tu plan de cuotas." : "El desembolso quedó registrado. Consulta tu plan de cuotas.") : loan.credito.estado === "PAGADO" ? "El crédito está pagado. Puedes consultar su historial." : "Las condiciones aceptadas están registradas."}</Text></View>
       ) : loan.credito.estado === "RECHAZADO" ? (
         <View style={styles.notice}><Text style={styles.noticeTitle}>Solicitud rechazada</Text><Text style={styles.bodyText}>{loan.evaluacion?.motivos?.trim() || "Esta solicitud no cumplió los criterios actuales de evaluación."}</Text></View>
       ) : approved ? (
@@ -1185,9 +1187,9 @@ function LoanDetail({
       {loan.cuotas.length > 0 ? (
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Plan de cuotas</Text>
-          <InfoRow label="Saldo pendiente" value={currency(loanBalance(loan))} />
+          <InfoRow label="Saldo pendiente" value={quoteCurrency(loanBalance(loan))} />
           {nextInstallment(loan) ? <InfoRow label="Próximo vencimiento" value={dateLabel(nextInstallment(loan)!.fecha_vencimiento)} /> : <Text style={styles.bodyText}>No tienes cuotas pendientes.</Text>}
-          {overdueInstallmentCount(loan) > 0 ? <InfoRow label={`Cuotas vencidas (${overdueInstallmentCount(loan)})`} value={currency(overdueBalance(loan))} /> : null}
+          {overdueInstallmentCount(loan) > 0 ? <InfoRow label={`Cuotas vencidas (${overdueInstallmentCount(loan)})`} value={quoteCurrency(overdueBalance(loan))} /> : null}
           {loan.cuotas.map((installment) => (
             <View key={installment.numero_cuota} style={[styles.installmentItem, installmentBalance(installment) > 0 && daysUntilDue(installment.fecha_vencimiento) != null && daysUntilDue(installment.fecha_vencimiento)! < 0 && styles.installmentOverdue]}>
               <View style={styles.loanRow}>
@@ -1195,9 +1197,9 @@ function LoanDetail({
                 <Text style={[styles.installmentState, installmentBalance(installment) <= 0 && styles.installmentPaid, installmentBalance(installment) > 0 && daysUntilDue(installment.fecha_vencimiento) != null && daysUntilDue(installment.fecha_vencimiento)! < 0 && styles.installmentOverdueText]}>{installmentStatusLabel(installment)}</Text>
               </View>
               <Text style={styles.installmentDate}>Vence {dateLabel(installment.fecha_vencimiento)}</Text>
-              <InfoRow label="Valor" value={currency(installment.monto_cuota)} />
-              <InfoRow label="Pagado" value={currency(installment.monto_pagado)} />
-              <InfoRow label="Saldo de esta cuota" value={currency(installmentBalance(installment))} />
+              <InfoRow label="Valor" value={quoteCurrency(installment.monto_cuota)} />
+              <InfoRow label="Pagado" value={quoteCurrency(installment.monto_pagado)} />
+              <InfoRow label="Saldo de esta cuota" value={quoteCurrency(installmentBalance(installment))} />
               {sandboxPaymentsEnabled && loan.credito.estado === "DESEMBOLSADO" && installmentBalance(installment) > 0 ? (
                 <View style={styles.sandboxPaymentActions}>
                   <PrimaryButton
@@ -1224,7 +1226,7 @@ function LoanDetail({
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Historial de pagos</Text>
           {loan.pagos.map((payment, index) => (
-            <InfoRow key={`${payment.fecha_pago}-${index}`} label={dateLabel(payment.fecha_pago, true)} value={currency(payment.monto_pagado)} />
+            <InfoRow key={`${payment.fecha_pago}-${index}`} label={dateLabel(payment.fecha_pago, true)} value={quoteCurrency(payment.monto_pagado)} />
           ))}
         </View>
       ) : null}
