@@ -185,6 +185,17 @@
 
         <section id="section-creditos" class="page-section" hidden aria-labelledby="credits-title">
           <div class="section-heading"><div><p class="eyebrow">FINANCIACIÓN</p><h2 id="credits-title">Créditos</h2></div><button id="new-credit-button" class="button button-primary" type="button">+ Nueva solicitud</button></div>
+          <section class="content-card">
+            <div class="card-heading"><div><h3>Tasa de nuevas solicitudes</h3><p>Define la tasa para el mes elegido; seguirá vigente hasta que configures otra. Las solicitudes existentes conservan sus condiciones.</p></div></div>
+            <p id="monthly-rate-current" class="form-note" aria-live="polite"></p>
+            <form id="monthly-rate-form" class="client-form">
+              <label for="monthly-rate-month">Mes de vigencia</label><input id="monthly-rate-month" type="month" required />
+              <label for="monthly-rate-value">Tasa de interés mensual (%)</label><input id="monthly-rate-value" type="number" min="0.01" max="100" step="0.01" required />
+              <p class="form-note">El cambio se aplicará a las nuevas simulaciones del mes seleccionado. Revisa la tasa antes de guardarla.</p>
+              <button class="button button-primary" type="submit">Guardar tasa</button>
+              <p id="monthly-rate-message" class="message" role="status" aria-live="polite"></p>
+            </form>
+          </section>
           <section id="credit-form-panel" class="content-card" hidden>
             <div class="card-heading"><div><h3>Nueva solicitud de crédito</h3><p>El backend acepta montos de $500.000 a $1.500.000 COP y plazos hasta 12 meses.</p></div></div>
             <form id="credit-form" class="client-form">

@@ -20,6 +20,7 @@ import * as SecureStore from "expo-secure-store";
 import { StatusBar } from "expo-status-bar";
 import { api, apiHost, ApiError, Loan, Notification, User } from "./src/api";
 import type { WompiInstallmentStatus } from "./src/api";
+import type { LoanQuote } from "./src/api";
 
 const TOKEN_KEY = "credifresh_access_token";
 const CLIENT_LINK_REQUIRED = "Tu cuenta aún no está vinculada a un perfil de cliente";
@@ -45,6 +46,10 @@ function currency(value: number | string | null | undefined) {
     currency: "COP",
     maximumFractionDigits: 0,
   }).format(Number(value));
+}
+
+function quoteCurrency(value: number | string) {
+  return new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(value));
 }
 
 function dateLabel(value: string, includeTime = false) {
@@ -161,6 +166,7 @@ export default function App() {
   const [economicActivity, setEconomicActivity] = useState("");
   const [requestedAmount, setRequestedAmount] = useState("500000");
   const [requestedTerm, setRequestedTerm] = useState("6");
+  const [loanQuote, setLoanQuote] = useState<LoanQuote | null>(null);
   const [busy, setBusy] = useState(false);
   const [paymentBusyQuotaId, setPaymentBusyQuotaId] = useState<number | null>(null);
   const [paymentMessages, setPaymentMessages] = useState<Record<number, string>>({});
@@ -727,7 +733,7 @@ export default function App() {
         financialProfileReady ? "Perfil actualizado" : "Perfil guardado",
         financialProfileReady
           ? "Los cambios se tendrán en cuenta en futuras evaluaciones. No modifican decisiones de créditos anteriores."
-          : "Ya puedes enviar una solicitud. El administrador asignará la tasa mensual antes de evaluarla.",
+          : "Ya puedes simular y enviar una solicitud de crédito.",
       );
     } catch (cause) {
       if (await handleExpiredSession(cause)) return;
@@ -737,7 +743,7 @@ export default function App() {
     }
   }
 
-  async function submitLoanRequest() {
+  async function simulateLoanRequest() {
     if (!token) return;
     if (!/^\+?\d{7,20}$/.test(phone.trim()) || address.trim().length < 5) {
       setError("Completa y guarda tu teléfono y dirección en Datos de contacto antes de solicitar el crédito.");
@@ -753,11 +759,29 @@ export default function App() {
     setBusy(true);
     setError("");
     try {
-      const result = await api.requestLoan(token, { monto: amount, plazo_meses: term });
-      await loadAccount(token);
-      Alert.alert("Solicitud recibida", `Registramos la solicitud #${result.credito.id}. El administrador asignará la tasa y luego evaluará tu perfil.`);
+      setLoanQuote(await api.simulateLoan(token, { monto: amount, plazo_meses: term }));
     } catch (cause) {
       if (await handleExpiredSession(cause)) return;
+      setError(cause instanceof Error ? cause.message : "No se pudo calcular la simulación.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitLoanRequest() {
+    if (!token || !loanQuote) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api.requestLoan(token, { monto: Number(loanQuote.monto), plazo_meses: loanQuote.plazo_meses,
+        acepta: true, mes_tasa: loanQuote.mes_tasa, tasa_interes: loanQuote.tasa_interes,
+        cuota_mensual: loanQuote.cuota_mensual, total_estimado: loanQuote.total_estimado });
+      setLoanQuote(null);
+      await loadAccount(token);
+      Alert.alert("Solicitud recibida", `Registramos la solicitud #${result.credito.id}. La evaluaremos antes de decidir si se aprueba.`);
+    } catch (cause) {
+      if (await handleExpiredSession(cause)) return;
+      if (cause instanceof ApiError && cause.status === 409) setLoanQuote(null);
       setError(cause instanceof Error ? cause.message : "No se pudo enviar la solicitud.");
     } finally {
       setBusy(false);
@@ -767,13 +791,13 @@ export default function App() {
   function confirmAcceptance(loan: Loan) {
     const evaluation = loan.evaluacion;
     const total = loan.total_estimado;
-    if (!evaluation || total == null || !token) {
+    if (!evaluation || evaluation.cuota_mensual == null || total == null || !token) {
       setError("No encontramos las condiciones completas de esta oferta. Actualiza los datos e inténtalo de nuevo.");
       return;
     }
     Alert.alert(
       "Aceptar condiciones",
-      `Monto: ${currency(loan.credito.monto)}\nPlazo: ${loan.credito.plazo_meses} meses\nCuota estimada: ${currency(evaluation.cuota_mensual)}\nTotal estimado: ${currency(total)}\n\nAceptar no significa que el dinero ya haya sido transferido.`,
+      `Monto: ${quoteCurrency(loan.credito.monto)}\nPlazo: ${loan.credito.plazo_meses} meses\nTasa: ${rateLabel(loan.credito.tasa_interes)}\nCuota estimada: ${quoteCurrency(evaluation.cuota_mensual)}\nTotal estimado: ${quoteCurrency(total)}\n\nAceptar no significa que el dinero ya haya sido transferido.`,
       [
         { text: "Revisar después", style: "cancel" },
         {
@@ -1062,13 +1086,26 @@ export default function App() {
             ) : (
               <View style={styles.card}>
                 <Text style={styles.sectionTitle}>Solicitar un crédito</Text>
-                <Text style={styles.bodyText}>Elige monto y plazo. El administrador asignará la tasa mensual antes de evaluar la solicitud.</Text>
+                <Text style={styles.bodyText}>Elige el monto y el plazo, simula tus cuotas y revisa las condiciones antes de enviar la solicitud.</Text>
                 <Pressable onPress={() => { setEditingFinancialProfile(true); setError(""); }} style={styles.profileEditLink} accessibilityRole="button"><Text style={styles.textButton}>Revisar perfil financiero</Text></Pressable>
                 <Text style={[styles.fieldLabel, styles.secondLabel]}>Monto (COP)</Text>
-                <TextInput value={requestedAmount} onChangeText={setRequestedAmount} keyboardType="numeric" style={styles.input} />
+                <TextInput value={requestedAmount} onChangeText={(value) => { setRequestedAmount(value); setLoanQuote(null); }} keyboardType="numeric" style={styles.input} />
                 <Text style={[styles.fieldLabel, styles.secondLabel]}>Plazo en meses (1 a 12)</Text>
-                <TextInput value={requestedTerm} onChangeText={setRequestedTerm} keyboardType="numeric" style={styles.input} />
-                <PrimaryButton title={busy ? "Enviando…" : "Enviar solicitud"} onPress={() => void submitLoanRequest()} disabled={busy || !/^\+?\d{7,20}$/.test(phone.trim()) || address.trim().length < 5} />
+                <TextInput value={requestedTerm} onChangeText={(value) => { setRequestedTerm(value); setLoanQuote(null); }} keyboardType="numeric" style={styles.input} />
+                <PrimaryButton title={busy ? "Procesando…" : "Simular cuotas"} onPress={() => void simulateLoanRequest()} disabled={busy || !/^\+?\d{7,20}$/.test(phone.trim()) || address.trim().length < 5} />
+                {loanQuote ? (
+                  <View style={styles.loanRepaymentSummary}>
+                    <Text style={styles.sectionTitle}>Condiciones de la solicitud</Text>
+                    <InfoRow label="Monto" value={quoteCurrency(loanQuote.monto)} />
+                    <InfoRow label="Plazo" value={`${loanQuote.plazo_meses} ${loanQuote.plazo_meses === 1 ? "mes" : "meses"}`} />
+                    <InfoRow label="Tasa mensual" value={rateLabel(loanQuote.tasa_interes)} />
+                    <InfoRow label="Cuota estimada" value={quoteCurrency(loanQuote.cuota_mensual)} />
+                    <InfoRow label="Total estimado" value={quoteCurrency(loanQuote.total_estimado)} />
+                    {loanQuote.cuotas.map((cuota) => <InfoRow key={cuota.numero} label={`Cuota ${cuota.numero}`} value={quoteCurrency(cuota.monto)} />)}
+                    <Text style={styles.bodyText}>La simulación incluye capital e intereses. La solicitud está sujeta a evaluación; enviarla no significa que esté aprobada ni desembolsada. Si las condiciones cambian, tendrás que revisarlas nuevamente.</Text>
+                    <PrimaryButton title={busy ? "Enviando…" : "Aceptar condiciones y enviar solicitud"} onPress={() => void submitLoanRequest()} disabled={busy} />
+                  </View>
+                ) : null}
               </View>
             )}
             <View style={styles.sectionHeader}>
@@ -1130,11 +1167,11 @@ function LoanDetail({
       </View>
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Condiciones</Text>
-        <InfoRow label="Monto solicitado" value={currency(loan.credito.monto)} />
+        <InfoRow label="Monto solicitado" value={quoteCurrency(loan.credito.monto)} />
         <InfoRow label="Plazo" value={`${loan.credito.plazo_meses} meses`} />
         <InfoRow label="Tasa mensual" value={rateLabel(loan.credito.tasa_interes)} />
-        {loan.evaluacion?.cuota_mensual != null ? <InfoRow label="Cuota estimada" value={currency(loan.evaluacion.cuota_mensual)} /> : null}
-        {loan.total_estimado != null ? <InfoRow label="Total estimado" value={currency(loan.total_estimado)} /> : null}
+        {loan.evaluacion?.cuota_mensual != null ? <InfoRow label="Cuota estimada" value={quoteCurrency(loan.evaluacion.cuota_mensual)} /> : null}
+        {loan.total_estimado != null ? <InfoRow label="Total estimado" value={quoteCurrency(loan.total_estimado)} /> : null}
       </View>
       {accepted ? (
         <View style={styles.notice}><Text style={styles.noticeTitle}>Condiciones aceptadas</Text><Text style={styles.bodyText}>El crédito sigue pendiente de desembolso. Aceptar las condiciones no significa que el dinero haya sido transferido.</Text></View>

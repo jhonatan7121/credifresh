@@ -67,6 +67,16 @@ export type FinancialProfile = FinancialProfileInput & {
   cliente_id: number;
 };
 
+export type LoanQuote = {
+  monto: number | string;
+  plazo_meses: number;
+  mes_tasa: string;
+  tasa_interes: number | string;
+  cuota_mensual: number | string;
+  total_estimado: number | string;
+  cuotas: Array<{ numero: number; monto: number | string }>;
+};
+
 type LoginResponse = { access_token: string; token_type: string };
 export type WompiSandboxLink = {
   referencia: string;
@@ -163,7 +173,9 @@ export const api = {
     request(`/clientes/${clientId}/perfil-financiero`, token, { method: "POST", body: JSON.stringify(profile) }),
   updateFinancialProfile: (token: string, clientId: number, profile: FinancialProfileInput) =>
     request<{ mensaje: string; perfil_financiero: FinancialProfile }>(`/clientes/${clientId}/perfil-financiero`, token, { method: "PUT", body: JSON.stringify(profile) }),
-  requestLoan: (token: string, loan: { monto: number; plazo_meses: number }) =>
+  simulateLoan: (token: string, loan: { monto: number; plazo_meses: number }) =>
+    request<LoanQuote>("/creditos/simular-solicitud", token, { method: "POST", body: JSON.stringify(loan) }),
+  requestLoan: (token: string, loan: { monto: number; plazo_meses: number; acepta: true; mes_tasa: string; tasa_interes: number | string; cuota_mensual: number | string; total_estimado: number | string }) =>
     request<{ mensaje: string; credito: Loan["credito"] }>("/creditos/mis", token, { method: "POST", body: JSON.stringify(loan) }),
   myLoans: (token: string) => request<Loan[]>("/creditos/mis", token),
   createWompiInstallmentLink: (token: string, creditId: number, installmentId: number) =>

@@ -7,14 +7,16 @@ from typing import List, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
 from app.models.cliente import Cliente
 from app.models.aceptacion_credito import AceptacionCredito
 from app.models.credito import Credito
+from app.models.cotizacion_credito import TasaMensual, CotizacionAceptada
 from app.models.evaluacion import Evaluacion
-from modules.creditos.motor_decision import evaluar_credito
+from modules.creditos.motor_decision import evaluar_credito, calcular_cuota_mensual
 from app.models.perfil_financiero import PerfilFinanciero
 from app.core.deps import get_current_active_user, RoleChecker
 from app.models.usuario import Usuario
@@ -128,8 +130,23 @@ class CreditoSchema(BaseModel):
 
 
 class SolicitudClienteSchema(BaseModel):
-    monto: float = Field(gt=0)
+    monto: Decimal = Field(gt=0, decimal_places=2)
     plazo_meses: int = Field(gt=0, le=12)
+    acepta: Literal[True]
+    mes_tasa: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    tasa_interes: Decimal = Field(gt=0, le=100)
+    cuota_mensual: Decimal = Field(gt=0)
+    total_estimado: Decimal = Field(gt=0)
+
+
+class SimulacionSolicitudSchema(BaseModel):
+    monto: Decimal = Field(ge=500000, le=1500000, decimal_places=2)
+    plazo_meses: int = Field(ge=1, le=12)
+
+
+class TasaMensualSchema(BaseModel):
+    mes: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    tasa_interes: Decimal = Field(gt=0, le=100, decimal_places=2)
 
 
 class TasaCreditoSchema(BaseModel):
@@ -318,6 +335,74 @@ def listar_mis_creditos(
     return respuesta
 
 
+def _mes_actual_colombia():
+    return datetime.datetime.now(COLOMBIA_TZ).strftime("%Y-%m")
+
+
+def _tasa_vigente(db: Session, mes: str, bloquear: bool = False):
+    consulta = db.query(TasaMensual).filter(TasaMensual.mes <= mes).order_by(TasaMensual.mes.desc())
+    return (consulta.with_for_update() if bloquear else consulta).first()
+
+
+def _bloquear_cambio_tasas(db: Session):
+    # Serializa también la inserción de una tasa más reciente mientras se
+    # confirma una cotización basada en una tasa de un mes anterior.
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(:clave)"), {"clave": 43050181243})
+
+
+def _calcular_cotizacion(monto: Decimal, plazo_meses: int, tasa: Decimal, mes: str, cuota_final: Decimal | None = None):
+    # Usar el mismo cálculo de evaluación y amortización que la oferta final.
+    cuota = cuota_final if cuota_final is not None else Decimal(str(calcular_cuota_mensual(float(monto), plazo_meses, float(tasa))))
+    credito = Credito(monto=monto, plazo_meses=plazo_meses, tasa_interes=tasa)
+    evaluacion = Evaluacion(cuota_mensual=cuota)
+    cuotas = generar_plan_amortizacion(credito, evaluacion, datetime.datetime.now(COLOMBIA_TZ))
+    return {
+        "monto": monto, "plazo_meses": plazo_meses, "mes_tasa": mes,
+        "tasa_interes": tasa, "cuota_mensual": cuota,
+        "total_estimado": sum((Decimal(str(c.monto_cuota)) for c in cuotas), Decimal("0.00")),
+        "cuotas": [{"numero": c.numero_cuota, "monto": c.monto_cuota} for c in cuotas],
+    }
+
+
+@router.get("/tasas-mensuales/vigente")
+def obtener_tasa_vigente(db: Session = Depends(get_db), current_user: Usuario = Depends(RoleChecker(["ADMIN"]))):
+    mes = _mes_actual_colombia()
+    tasa = _tasa_vigente(db, mes)
+    return {"mes": mes, "mes_tasa": tasa.mes if tasa else None, "tasa_interes": tasa.tasa_interes if tasa else None}
+
+
+@router.put("/tasas-mensuales")
+def guardar_tasa_mensual(datos: TasaMensualSchema, db: Session = Depends(get_db), current_user: Usuario = Depends(RoleChecker(["ADMIN"]))):
+    _bloquear_cambio_tasas(db)
+    if datos.mes < _mes_actual_colombia():
+        raise HTTPException(status_code=400, detail="No se pueden modificar tasas de meses anteriores")
+    tasa = db.query(TasaMensual).filter_by(mes=datos.mes).with_for_update().first()
+    anterior = str(tasa.tasa_interes) if tasa else None
+    if tasa:
+        tasa.tasa_interes, tasa.actualizada_por = datos.tasa_interes, current_user.id
+    else:
+        tasa = TasaMensual(mes=datos.mes, tasa_interes=datos.tasa_interes, actualizada_por=current_user.id)
+        db.add(tasa)
+    registrar_auditoria(db=db, usuario=current_user, accion="CONFIGURAR_TASA_MENSUAL", entidad="configuracion", entidad_id=None,
+                        detalles={"mes": datos.mes, "tasa_anterior": anterior, "tasa_nueva": str(datos.tasa_interes)})
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="La tasa fue modificada simultáneamente; vuelve a intentarlo")
+    return {"mes": datos.mes, "tasa_interes": datos.tasa_interes}
+
+
+@router.post("/simular-solicitud")
+def simular_solicitud(datos: SimulacionSolicitudSchema, db: Session = Depends(get_db), current_user: Usuario = Depends(RoleChecker(["CLIENTE"]))):
+    mes = _mes_actual_colombia()
+    tasa = _tasa_vigente(db, mes)
+    if not tasa:
+        raise HTTPException(status_code=503, detail="La tasa de este mes aún no está disponible. Inténtalo más tarde.")
+    return _calcular_cotizacion(datos.monto, datos.plazo_meses, tasa.tasa_interes, tasa.mes)
+
+
 @router.post("/mis", status_code=201)
 def solicitar_mi_credito(
     solicitud: SolicitudClienteSchema,
@@ -340,32 +425,44 @@ def solicitar_mi_credito(
     if solicitud.monto < 500000 or solicitud.monto > 1500000:
         raise HTTPException(status_code=400, detail="El monto solicitado debe estar entre $500.000 y $1.500.000 COP")
 
+    _bloquear_cambio_tasas(db)
+    mes = _mes_actual_colombia()
+    tasa = _tasa_vigente(db, mes, bloquear=True)
+    if not tasa:
+        raise HTTPException(status_code=503, detail="La tasa de este mes aún no está disponible")
+    cotizacion = _calcular_cotizacion(Decimal(str(solicitud.monto)), solicitud.plazo_meses, tasa.tasa_interes, tasa.mes)
+    if any(getattr(solicitud, k) != cotizacion[k] for k in ("mes_tasa", "tasa_interes", "cuota_mensual", "total_estimado")):
+        raise HTTPException(status_code=409, detail="Las condiciones cambiaron. Simula el crédito nuevamente antes de solicitarlo.")
+
     credito = Credito(
         cliente_id=cliente.id,
         monto=solicitud.monto,
         plazo_meses=solicitud.plazo_meses,
-        tasa_interes=Decimal("0.00"),
+        tasa_interes=tasa.tasa_interes,
     )
     db.add(credito)
     db.flush()
+    db.add(CotizacionAceptada(credito_id=credito.id, usuario_id=current_user.id, mes_tasa=tasa.mes,
+        tasa_interes=tasa.tasa_interes, monto=credito.monto, plazo_meses=credito.plazo_meses,
+        cuota_mensual=cotizacion["cuota_mensual"], total_estimado=cotizacion["total_estimado"]))
     registrar_auditoria(
         db=db,
         usuario=current_user,
         accion="CREAR_CREDITO",
         entidad="credito",
         entidad_id=credito.id,
-        detalles={"canal": "APP_CLIENTE", "campos_registrados": ["cliente_id", "monto", "plazo_meses"], "contacto_cliente_asociado": True, "tasa_pendiente_admin": True},
+        detalles={"canal": "APP_CLIENTE", "mes_tasa": tasa.mes, "tasa_mensual": str(tasa.tasa_interes), "cuota_aceptada": str(cotizacion["cuota_mensual"]), "total_aceptado": str(cotizacion["total_estimado"])},
     )
     crear_notificacion(
         db=db,
         usuario_id=current_user.id,
         titulo="Solicitud de crédito recibida",
-        mensaje=f"Tu solicitud por ${float(credito.monto):,.0f} COP fue recibida. CrediFresh asignará la tasa antes de evaluarla.",
+        mensaje=f"Tu solicitud por ${float(credito.monto):,.0f} COP fue recibida y está pendiente de evaluación.",
         credito_id=credito.id,
     )
     db.commit()
     db.refresh(credito)
-    return {"mensaje": "Solicitud recibida; pendiente de tasa y evaluación administrativa", "credito": credito}
+    return {"mensaje": "Solicitud recibida; pendiente de evaluación administrativa", "credito": credito}
 
 
 @router.patch("/{credito_id}/tasa")
@@ -863,6 +960,25 @@ def evaluar_credito_endpoint(
     )
 
     db.add(evaluacion)
+
+    # La aceptación inicial solo vale para la oferta final si todos sus
+    # importes y condiciones siguen siendo exactamente los mismos.
+    cotizacion = db.query(CotizacionAceptada).filter_by(credito_id=credito.id).first()
+    if resultado.decision == "APROBADO" and cotizacion:
+        final = _calcular_cotizacion(Decimal(str(credito.monto)), credito.plazo_meses,
+                                    Decimal(str(credito.tasa_interes)), cotizacion.mes_tasa,
+                                    Decimal(str(evaluacion.cuota_mensual)))
+        campos = ("monto", "plazo_meses", "tasa_interes", "cuota_mensual", "total_estimado")
+        cliente_actual = db.query(Cliente).filter(Cliente.id == credito.cliente_id).first()
+        if cliente_actual and cliente_actual.usuario_id == cotizacion.usuario_id and all(getattr(cotizacion, campo) == final[campo] for campo in campos):
+            db.add(AceptacionCredito(credito_id=credito.id, cliente_id=credito.cliente_id,
+                usuario_id=cotizacion.usuario_id, fecha_aceptacion=cotizacion.fecha_aceptacion,
+                monto=cotizacion.monto, plazo_meses=cotizacion.plazo_meses,
+                tasa_interes=cotizacion.tasa_interes, cuota_mensual=cotizacion.cuota_mensual,
+                total_estimado=cotizacion.total_estimado, condiciones_version="1.0"))
+            registrar_auditoria(db=db, usuario=current_user, accion="ACEPTACION_INICIAL_CONFIRMADA",
+                entidad="credito", entidad_id=credito.id,
+                detalles={"motivo": "Condiciones finales coinciden con la solicitud aceptada", "usuario_cliente_id": cotizacion.usuario_id})
 
     registrar_auditoria(
         db=db,

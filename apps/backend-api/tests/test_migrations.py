@@ -17,6 +17,7 @@ EXPECTED_TABLES = {
     "auth_rate_limit_windows",
     "audit_logs",
     "aceptaciones_credito",
+    "cotizaciones_aceptadas",
     "clientes",
     "creditos",
     "cuotas_amortizacion",
@@ -25,6 +26,7 @@ EXPECTED_TABLES = {
     "pagos",
     "perfiles_financieros",
     "usuarios",
+    "tasas_credito_mensuales",
     "wompi_pagos",
     "wompi_desembolsos_sandbox",
 }

@@ -34,6 +34,8 @@
     ACTUALIZAR_PERFIL_FINANCIERO: "Actualizar perfil financiero",
     CREAR_CREDITO: "Crear solicitud de crédito",
     ASIGNAR_TASA_CREDITO: "Asignar tasa mensual del crédito",
+    CONFIGURAR_TASA_MENSUAL: "Configurar tasa para nuevas solicitudes",
+    ACEPTACION_INICIAL_CONFIRMADA: "Confirmar condiciones aceptadas al solicitar",
     EVALUAR_CREDITO: "Evaluar crédito",
     CAMBIAR_ESTADO_CREDITO: "Cambiar estado de crédito",
     ACEPTAR_CONDICIONES_CREDITO: "Aceptar condiciones del crédito",
@@ -1543,7 +1545,31 @@
       event.preventDefault();
       showSection(link.dataset.sectionLink);
       if (link.dataset.sectionLink === "auditoria") loadAudit();
+      if (link.dataset.sectionLink === "creditos") loadMonthlyRate();
     });
+  });
+  async function loadMonthlyRate() {
+    try {
+      const current = await api("/creditos/tasas-mensuales/vigente");
+      $("monthly-rate-month").value = current.mes;
+      $("monthly-rate-month").min = current.mes;
+      $("monthly-rate-current").textContent = current.tasa_interes == null
+        ? `No hay tasa vigente para ${current.mes}; las simulaciones no estarán disponibles.`
+        : `Tasa vigente para ${current.mes}: ${formatPercentage(Number(current.tasa_interes))} mensual (desde ${current.mes_tasa}).`;
+    } catch (error) { setMessage($("monthly-rate-message"), error.message || "No se pudo consultar la tasa."); }
+  }
+  $("monthly-rate-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = event.currentTarget.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      const mes = $("monthly-rate-month").value;
+      const tasa_interes = $("monthly-rate-value").value;
+      await api("/creditos/tasas-mensuales", { method: "PUT", body: JSON.stringify({ mes, tasa_interes }) });
+      await loadMonthlyRate();
+      setMessage($("monthly-rate-message"), `Tasa guardada para ${mes}.`, "success");
+    } catch (error) { setMessage($("monthly-rate-message"), error.message || "No se pudo guardar la tasa."); }
+    finally { button.disabled = false; }
   });
   $("audit-filters").addEventListener("submit", (event) => {
     event.preventDefault();

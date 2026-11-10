@@ -11,6 +11,7 @@ from app.models.amortizacion import CuotaAmortizacion
 from app.models.audit_log import AuditLog
 from app.models.cliente import Cliente
 from app.models.credito import Credito
+from app.models.cotizacion_credito import TasaMensual, CotizacionAceptada  # noqa: F401
 from app.models.evaluacion import Evaluacion
 from app.models.notificacion import Notificacion
 from app.models.pago import Pago
