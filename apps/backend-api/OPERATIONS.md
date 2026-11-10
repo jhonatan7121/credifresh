@@ -141,6 +141,24 @@ creaciones: revisar manualmente Wompi antes de decidir qué hacer. Una respuesta
 no confirmada no implica que Wompi no haya creado el enlace. La reversión de la
 migración también queda bloqueada si hay reservas sin enlace confirmado.
 
+En Sandbox, un administrador autenticado puede consultar
+`GET /integraciones/wompi/sandbox/revision-enlaces` para localizar reservas en
+`CREANDO` o `INCIERTO`, sin exponer llaves ni URLs de checkout. La lista está
+limitada a los 100 registros más antiguos y no libera reservas automáticamente.
+Un enlace sin ID requiere revisión manual en Wompi: una consulta infructuosa
+por sí sola no demuestra que el enlace no exista ni autoriza generar otro.
+
+Si se conoce el ID de una transacción asociada a un enlace guardado, un
+administrador de Sandbox puede solicitar
+`POST /integraciones/wompi/sandbox/creditos/{credito_id}/cuotas/{cuota_id}/reconciliar`
+con el JSON `{"transaction_id": "ID_OBTENIDO_EN_WOMPI"}`. El servidor consulta
+Wompi y comprueba que el enlace corresponda a esa cuota antes de procesar la
+transacción; para una aprobación también verifica moneda, monto y saldo. La
+aplicación del pago y la auditoría administrativa ocurren en la misma
+transacción. No acepta estado o monto enviados por el cliente. Esta herramienta
+no cubre enlaces cuyo ID no se haya guardado, reembolsos ni la conciliación
+periódica bancaria, y permanece bloqueada fuera de Sandbox.
+
 El evento de recaudo requiere la consulta autenticada de la transacción a
 Wompi y confirma identificador, link, estado, moneda y monto. Si la consulta no
 devuelve un link o falla, el pago no se aplica. Antes de instalar este cambio,
@@ -149,7 +167,7 @@ verifica con una transacción Sandbox que la respuesta de consulta incluya el
 reconciliación manual. No habilites producción solo por pasar las pruebas locales.
 
 El servicio `credifresh-wompi-sandbox` es exclusivamente para pruebas y usa
-SQLite efímera, registros sintéticos y llaves `prv_test_` / `test_events_`.
+PostgreSQL dedicado, registros sintéticos y llaves `prv_test_` / `test_events_`.
 No le agregues llaves de producción ni cambies su ambiente.
 
 La API admite ambientes separados mediante `WOMPI_ENVIRONMENT=sandbox` o

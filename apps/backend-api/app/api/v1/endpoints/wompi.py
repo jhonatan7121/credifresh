@@ -1,13 +1,15 @@
 import secrets
+import os
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
-from app.core.deps import get_current_active_user
+from app.core.deps import RoleChecker, get_current_active_user
 from app.models.amortizacion import CuotaAmortizacion
 from app.models.cliente import Cliente
 from app.models.credito import Credito
@@ -15,9 +17,50 @@ from app.models.pago import Pago
 from app.models.usuario import Usuario
 from app.models.wompi_pago import WompiPago
 from app.services.wompi_service import consultar_transaccion, crear_link_pago, get_wompi_environment, validar_firma_evento, verificar_configuracion_recaudo
+from modules.audit.audit_service import registrar_auditoria
 
 
 router = APIRouter(prefix="/integraciones/wompi", tags=["Wompi"])
+
+
+class ReconciliacionSandbox(BaseModel):
+    transaction_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+def _exigir_sandbox_recaudo():
+    if os.getenv("ENVIRONMENT", "").strip().lower() != "sandbox" or get_wompi_environment() != "sandbox":
+        raise HTTPException(status_code=404, detail="Reconciliación disponible únicamente en Sandbox.")
+
+
+@router.get("/sandbox/revision-enlaces")
+def listar_enlaces_por_revisar(
+    db: Session = Depends(get_db), current_user: Usuario = Depends(RoleChecker(["ADMIN"]))
+):
+    """List unresolved reservations without exposing checkout URLs or secrets."""
+    _exigir_sandbox_recaudo()
+    attempts = (db.query(WompiPago).filter(WompiPago.estado.in_(["CREANDO", "INCIERTO"]))
+                .order_by(WompiPago.id.asc()).limit(100).all())
+    return {"intentos": [{"credito_id": row.credito_id, "cuota_id": row.cuota_id,
+                         "referencia": row.referencia, "estado": row.estado,
+                         "creado_en": row.creado_en.isoformat() if row.creado_en else None}
+                        for row in attempts]}
+
+
+@router.post("/sandbox/creditos/{credito_id}/cuotas/{cuota_id}/reconciliar")
+def reconciliar_cuota_sandbox(
+    credito_id: int, cuota_id: int, datos: ReconciliacionSandbox,
+    db: Session = Depends(get_db), current_user: Usuario = Depends(RoleChecker(["ADMIN"]))
+):
+    """Recover a specific known transaction without trusting client-provided status or amounts."""
+    _exigir_sandbox_recaudo()
+    transaction = consultar_transaccion(datos.transaction_id)
+    link_id = transaction.get("payment_link_id")
+    if not isinstance(link_id, str) or not link_id:
+        raise HTTPException(status_code=502, detail="Wompi no confirmó el link asociado a la transacción.")
+    intento = db.query(WompiPago).filter_by(credito_id=credito_id, cuota_id=cuota_id, wompi_link_id=link_id).first()
+    if not intento:
+        raise HTTPException(status_code=409, detail="La transacción no corresponde al link registrado para esta cuota.")
+    return _aplicar_transaccion_verificada(db, transaction, "sandbox", actor=current_user)
 
 
 @router.post("/creditos/{credito_id}/cuotas/{cuota_id}/link", status_code=201)
@@ -184,6 +227,13 @@ async def _recibir_evento(
     # Fields absent from signature.properties must not determine the ledger.
     # Wompi is the authority for link, currency, amount, and current status.
     transaction = await run_in_threadpool(consultar_transaccion, transaction_id)
+    return _aplicar_transaccion_verificada(db, transaction, expected_environment)
+
+
+def _aplicar_transaccion_verificada(db: Session, transaction: dict, expected_environment: str, actor: Usuario | None = None):
+    transaction_id = transaction.get("id")
+    if not isinstance(transaction_id, str) or not transaction_id:
+        raise HTTPException(status_code=502, detail="Wompi no confirmó el identificador de la transacción.")
     link_id = transaction.get("payment_link_id")
     if not isinstance(link_id, str) or not link_id:
         raise HTTPException(status_code=502, detail="Wompi no confirmó el link asociado a la transacción.")
@@ -208,6 +258,10 @@ async def _recibir_evento(
         # is not mistaken for a duplicate of an earlier pending notification.
         if estado_final_fallido:
             intento.wompi_transaction_id = transaction_id
+        if actor:
+            registrar_auditoria(db=db, usuario=actor, accion="RECONCILIAR_CUOTA_WOMPI_SANDBOX",
+                entidad="credito", entidad_id=intento.credito_id,
+                detalles={"cuota_id": intento.cuota_id, "estado_wompi": estado})
         db.commit()
         return {"recibido": True, "procesado": False, "estado": intento.estado}
 
@@ -240,6 +294,10 @@ async def _recibir_evento(
     cuotas = db.query(CuotaAmortizacion).filter(CuotaAmortizacion.credito_id == credito.id).all()
     if cuotas and all(item.estado == "PAGADA" or item.id == cuota.id for item in cuotas):
         credito.estado = "PAGADO"
+    if actor:
+        registrar_auditoria(db=db, usuario=actor, accion="RECONCILIAR_CUOTA_WOMPI_SANDBOX",
+            entidad="credito", entidad_id=intento.credito_id,
+            detalles={"cuota_id": intento.cuota_id, "estado_wompi": estado})
     db.commit()
     return {"recibido": True, "procesado": True, "estado": "PAGADO"}
 

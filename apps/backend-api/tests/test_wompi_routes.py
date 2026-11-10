@@ -29,6 +29,7 @@ from app.models.credito import Credito
 from app.models.pago import Pago
 from app.models.usuario import Usuario
 from app.models.wompi_pago import WompiPago
+from app.models.audit_log import AuditLog
 
 
 engine = create_engine(
@@ -286,6 +287,84 @@ def test_falla_consulta_wompi_no_aplica_pago():
         assert db.query(CuotaAmortizacion).one().estado == "PENDIENTE"
     finally:
         db.close()
+
+
+def test_reconciliacion_sandbox_aplica_una_vez_y_audita(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "sandbox")
+    provider = make_event()["data"]["transaction"]
+    monkeypatch.setattr(wompi_endpoint, "consultar_transaccion", lambda _id: provider)
+    db = Session()
+    try:
+        admin = Usuario(email="admin@example.invalid", password_hash="x", rol="ADMIN", activo=True)
+        db.add(admin)
+        db.commit()
+        credit, quota = db.query(Credito).one(), db.query(CuotaAmortizacion).one()
+        data = wompi_endpoint.ReconciliacionSandbox(transaction_id="route-tx-001")
+        first = wompi_endpoint.reconciliar_cuota_sandbox(credit.id, quota.id, data, db, admin)
+        second = wompi_endpoint.reconciliar_cuota_sandbox(credit.id, quota.id, data, db, admin)
+        assert first["estado"] == "PAGADO"
+        assert second["duplicado"] is True
+        assert db.query(Pago).count() == 1
+        assert db.query(AuditLog).filter_by(accion="RECONCILIAR_CUOTA_WOMPI_SANDBOX").count() == 1
+    finally:
+        db.close()
+
+
+def test_reconciliacion_rechaza_link_ajeno_y_monto_incorrecto(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "sandbox")
+    provider = make_event()["data"]["transaction"]
+    monkeypatch.setattr(wompi_endpoint, "consultar_transaccion", lambda _id: provider)
+    db = Session()
+    try:
+        admin = Usuario(email="admin@example.invalid", password_hash="x", rol="ADMIN", activo=True)
+        db.add(admin)
+        db.commit()
+        credit, quota = db.query(Credito).one(), db.query(CuotaAmortizacion).one()
+        data = wompi_endpoint.ReconciliacionSandbox(transaction_id="route-tx-001")
+        provider["payment_link_id"] = "otro-link"
+        with pytest.raises(HTTPException) as wrong_link:
+            wompi_endpoint.reconciliar_cuota_sandbox(credit.id, quota.id, data, db, admin)
+        assert wrong_link.value.status_code == 409
+        provider["payment_link_id"] = "route-link-001"
+        provider["amount_in_cents"] = 123
+        with pytest.raises(HTTPException) as wrong_amount:
+            wompi_endpoint.reconciliar_cuota_sandbox(credit.id, quota.id, data, db, admin)
+        assert wrong_amount.value.status_code == 409
+        assert db.query(Pago).count() == 0
+        assert quota.estado == "PENDIENTE"
+    finally:
+        db.close()
+
+
+def test_revision_lista_reservas_sin_link_y_bloquea_produccion(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "sandbox")
+    db = Session()
+    try:
+        attempt = db.query(WompiPago).one()
+        attempt.estado, attempt.checkout_url, attempt.wompi_link_id = "INCIERTO", None, None
+        db.commit()
+        result = wompi_endpoint.listar_enlaces_por_revisar(db, db.query(Usuario).one())
+        assert len(result["intentos"]) == 1
+        assert result["intentos"][0]["estado"] == "INCIERTO"
+        assert "checkout_url" not in result["intentos"][0]
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        with pytest.raises(HTTPException) as exc:
+            wompi_endpoint.listar_enlaces_por_revisar(db, db.query(Usuario).one())
+        assert exc.value.status_code == 404
+    finally:
+        db.close()
+
+
+def test_reconciliacion_requiere_admin(client, monkeypatch):
+    from app.core.deps import get_current_active_user
+    from main import app
+    from types import SimpleNamespace
+    monkeypatch.setenv("ENVIRONMENT", "sandbox")
+    monkeypatch.setattr(wompi_endpoint, "consultar_transaccion", lambda _id: pytest.fail("no debe consultar Wompi"))
+    app.dependency_overrides[get_current_active_user] = lambda: SimpleNamespace(id=42, rol="CLIENTE", activo=True)
+    response = client.post("/integraciones/wompi/sandbox/creditos/1/cuotas/1/reconciliar", json={"transaction_id": "route-tx-001"})
+    assert response.status_code == 403
+    assert client.get("/integraciones/wompi/sandbox/revision-enlaces").status_code == 403
 
 
 def test_creacion_incierta_no_se_repite(monkeypatch):

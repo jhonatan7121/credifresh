@@ -1,6 +1,9 @@
 """Payment-link concurrency against the explicitly isolated PostgreSQL database."""
 
 import datetime
+import asyncio
+import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -11,6 +14,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
@@ -21,6 +25,7 @@ from app.models.cliente import Cliente
 from app.models.credito import Credito
 from app.models.usuario import Usuario
 from app.models.wompi_pago import WompiPago
+from app.models.pago import Pago
 
 
 def isolated_engine():
@@ -153,3 +158,83 @@ def test_migracion_postgres_rechaza_duplicados_sin_alterarlos():
         assert columns["wompi_link_id"]["nullable"] is False
     finally:
         migration_engine.dispose()
+
+
+@pytest.mark.skipif(not os.getenv("POSTGRES_TEST_DATABASE_URL"), reason="Requiere PostgreSQL local aislado")
+def test_webhook_y_reconciliacion_simultaneos_aplican_un_solo_pago(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "sandbox")
+    monkeypatch.setenv("WOMPI_ENVIRONMENT", "sandbox")
+    monkeypatch.setenv("WOMPI_PRIVATE_KEY", "prv_test_local_ficticia")
+    monkeypatch.setenv("WOMPI_EVENTS_SECRET", "test_events_ficticio")
+    engine = isolated_engine()
+    Session = sessionmaker(bind=engine, autoflush=False)
+    unique = uuid4().hex
+    tx_id, link_id = f"tx-{unique}", f"link-{unique}"
+    db = Session()
+    try:
+        admin = Usuario(email=f"admin-{unique}@example.invalid", password_hash="x", rol="ADMIN", activo=True)
+        db.add(admin)
+        db.flush()
+        person = Cliente(nombre="Cliente ficticio", cedula=unique[:12], telefono="3000000000", usuario_id=admin.id)
+        db.add(person)
+        db.flush()
+        credit = Credito(cliente_id=person.id, monto=Decimal("1250.00"), plazo_meses=1,
+                         tasa_interes=Decimal("0"), estado="DESEMBOLSADO")
+        db.add(credit)
+        db.flush()
+        quota = CuotaAmortizacion(credito_id=credit.id, numero_cuota=1,
+            fecha_vencimiento=datetime.datetime(2026, 12, 1), monto_cuota=Decimal("1250.00"),
+            capital=Decimal("1250.00"), interes=Decimal("0"), saldo_remanente=Decimal("0"),
+            monto_pagado=Decimal("0"), estado="PENDIENTE")
+        db.add(quota)
+        db.flush()
+        db.add(WompiPago(credito_id=credit.id, cuota_id=quota.id, referencia=unique,
+                         wompi_link_id=link_id, monto_esperado=Decimal("1250.00"),
+                         estado="PENDIENTE", checkout_url=f"https://checkout.wompi.co/l/{unique}"))
+        db.commit()
+        credit_id, quota_id, admin_id = credit.id, quota.id, admin.id
+    finally:
+        db.close()
+
+    transaction = {"id": tx_id, "payment_link_id": link_id, "status": "APPROVED",
+                   "amount_in_cents": 125000, "currency": "COP"}
+    sync = threading.Barrier(2, timeout=10)
+    def consult(_id):
+        sync.wait()
+        return transaction.copy()
+    monkeypatch.setattr(endpoint, "consultar_transaccion", consult)
+
+    def webhook():
+        timestamp = 1794300000
+        digest = hashlib.sha256(f"{tx_id}APPROVED125000{timestamp}test_events_ficticio".encode()).hexdigest()
+        event = {"event": "transaction.updated", "environment": "test", "timestamp": timestamp,
+                 "data": {"transaction": transaction},
+                 "signature": {"properties": ["transaction.id", "transaction.status", "transaction.amount_in_cents"],
+                               "checksum": digest}}
+        async def receive():
+            return {"type": "http.request", "body": json.dumps(event).encode(), "more_body": False}
+        request = Request({"type": "http", "method": "POST", "path": "/", "headers": [], "query_string": b""}, receive)
+        session = Session()
+        try:
+            return asyncio.run(endpoint.recibir_evento_sandbox(request, session, digest))
+        finally:
+            session.close()
+
+    def reconcile():
+        session = Session()
+        try:
+            return endpoint.reconciliar_cuota_sandbox(credit_id, quota_id,
+                endpoint.ReconciliacionSandbox(transaction_id=tx_id), session, session.get(Usuario, admin_id))
+        finally:
+            session.close()
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first, second = pool.submit(webhook), pool.submit(reconcile)
+            first.result(timeout=20)
+            second.result(timeout=20)
+        with Session() as session:
+            assert session.query(Pago).filter_by(credito_id=credit_id, cuota_id=quota_id).count() == 1
+            assert session.get(CuotaAmortizacion, quota_id).monto_pagado == Decimal("1250.00")
+    finally:
+        engine.dispose()
