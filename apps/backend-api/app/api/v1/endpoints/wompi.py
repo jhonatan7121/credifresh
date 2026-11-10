@@ -1,7 +1,9 @@
 import secrets
+import os
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
@@ -16,6 +18,17 @@ from app.services.wompi_service import crear_link_pago, get_wompi_environment, v
 
 
 router = APIRouter(prefix="/integraciones/wompi", tags=["Wompi"])
+
+
+@router.get("/sandbox/preflight-migracion")
+def preflight_migracion(db: Session = Depends(get_db)):
+    """Temporary, sandbox-only aggregate check; exposes no records or identifiers."""
+    if os.getenv("ENVIRONMENT", "").strip().lower() != "sandbox" or os.getenv("WOMPI_ENVIRONMENT", "").strip().lower() != "sandbox":
+        raise HTTPException(status_code=404, detail="No disponible")
+    duplicates = (db.query(WompiPago.cuota_id)
+        .filter(WompiPago.estado.in_(["CREANDO", "INCIERTO", "PENDIENTE", "FALLIDO"]))
+        .group_by(WompiPago.cuota_id).having(func.count(WompiPago.id) > 1).limit(1).first())
+    return {"lista_para_migracion": duplicates is None}
 
 
 @router.post("/creditos/{credito_id}/cuotas/{cuota_id}/link", status_code=201)

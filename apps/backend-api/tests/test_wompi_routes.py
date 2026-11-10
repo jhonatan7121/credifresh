@@ -248,3 +248,23 @@ def test_crear_link_reutiliza_intento_pendiente(monkeypatch):
     finally:
         db.close()
     assert result["checkout_url"].endswith("route-link-001")
+
+
+def test_preflight_devuelve_unicamente_booleano_y_solo_en_sandbox(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "sandbox")
+    monkeypatch.setenv("WOMPI_ENVIRONMENT", "sandbox")
+    db = Session()
+    try:
+        assert wompi_endpoint.preflight_migracion(db) == {"lista_para_migracion": True}
+        intent = db.query(WompiPago).one()
+        db.add(WompiPago(credito_id=intent.credito_id, cuota_id=intent.cuota_id,
+            referencia="otro-ref", wompi_link_id="otro-link", monto_esperado=intent.monto_esperado,
+            estado="FALLIDO", checkout_url="https://example.invalid/link"))
+        db.commit()
+        assert wompi_endpoint.preflight_migracion(db) == {"lista_para_migracion": False}
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        with pytest.raises(HTTPException) as exc:
+            wompi_endpoint.preflight_migracion(db)
+        assert exc.value.status_code == 404
+    finally:
+        db.close()
