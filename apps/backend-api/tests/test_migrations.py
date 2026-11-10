@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 
@@ -69,7 +70,27 @@ class InitialMigrationTests(unittest.TestCase):
                 }
                 self.assertEqual(payout_indexes.get("ix_wompi_desembolsos_sandbox_credito_id"), 1)
                 self.assertEqual(payout_indexes.get("ix_wompi_desembolsos_sandbox_payout_id"), 1)
+                payment_indexes = {row[1]: row[2] for row in connection.execute("PRAGMA index_list('wompi_pagos')")}
+                self.assertEqual(payment_indexes.get("uq_wompi_pago_cuota_abierto"), 1)
             finally:
                 connection.close()
 
         self.assertSetEqual(tables, EXPECTED_TABLES)
+
+    def test_migration_rechaza_intentos_abiertos_duplicados(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "migration-duplicates.sqlite3"
+            environment = os.environ.copy()
+            environment["DATABASE_URL"] = f"sqlite:///{database_path.as_posix()}"
+            base_command = [sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade"]
+            subprocess.run(base_command + ["12da730bf081"], cwd=BACKEND_DIRECTORY, env=environment, check=True)
+            with closing(sqlite3.connect(database_path)) as connection:
+                for i in (1, 2):
+                    connection.execute("""INSERT INTO wompi_pagos
+                        (credito_id, cuota_id, referencia, wompi_link_id, monto_esperado, estado, checkout_url)
+                        VALUES (1, 1, ?, ?, 1250, 'PENDIENTE', ?)""", (f"ref-{i}", f"link-{i}", f"url-{i}"))
+                connection.commit()
+            result = subprocess.run(base_command + ["head"], cwd=BACKEND_DIRECTORY, env=environment,
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("múltiples intentos abiertos", result.stderr)

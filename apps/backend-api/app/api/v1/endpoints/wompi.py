@@ -2,6 +2,8 @@ import secrets
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
@@ -12,7 +14,7 @@ from app.models.credito import Credito
 from app.models.pago import Pago
 from app.models.usuario import Usuario
 from app.models.wompi_pago import WompiPago
-from app.services.wompi_service import crear_link_pago, get_wompi_environment, validar_firma_evento
+from app.services.wompi_service import consultar_transaccion, crear_link_pago, get_wompi_environment, validar_firma_evento, verificar_configuracion_recaudo
 
 
 router = APIRouter(prefix="/integraciones/wompi", tags=["Wompi"])
@@ -29,7 +31,7 @@ def crear_link_para_cuota(
     cuota = db.query(CuotaAmortizacion).filter(
         CuotaAmortizacion.id == cuota_id,
         CuotaAmortizacion.credito_id == credito_id,
-    ).first()
+    ).with_for_update().first()
     if not credito or not cuota:
         raise HTTPException(status_code=404, detail="Crédito o cuota no encontrados.")
     if credito.estado != "DESEMBOLSADO":
@@ -41,6 +43,7 @@ def crear_link_para_cuota(
     elif current_user.rol not in {"ADMIN", "GESTOR"}:
         raise HTTPException(status_code=403, detail="No tienes permiso para crear links de pago.")
 
+    verificar_configuracion_recaudo()
     pendiente = Decimal(str(cuota.monto_cuota)) - Decimal(str(cuota.monto_pagado))
     if pendiente <= 0:
         raise HTTPException(status_code=409, detail="La cuota ya está pagada.")
@@ -48,12 +51,16 @@ def crear_link_para_cuota(
         db.query(WompiPago)
         .filter(
             WompiPago.cuota_id == cuota.id,
-            WompiPago.estado == "PENDIENTE",
+            WompiPago.estado.in_(["CREANDO", "INCIERTO", "PENDIENTE", "FALLIDO"]),
         )
         .order_by(WompiPago.id.desc())
         .first()
     )
     if existente:
+        if not existente.wompi_link_id or not existente.checkout_url:
+            raise HTTPException(status_code=409, detail="La creación del link requiere revisión; no se generará otro automáticamente.")
+        if Decimal(str(existente.monto_esperado)) != pendiente:
+            raise HTTPException(status_code=409, detail="El saldo cambió desde la creación del link; se requiere revisión.")
         return {
             "referencia": existente.referencia,
             "credito_id": credito.id,
@@ -65,27 +72,38 @@ def crear_link_para_cuota(
         }
 
     referencia = secrets.token_hex(16)
-    link = crear_link_pago(
-        referencia=referencia,
-        credito_id=credito.id,
-        numero_cuota=cuota.numero_cuota,
-        monto=pendiente,
-    )
+    numero_cuota = cuota.numero_cuota
     intento = WompiPago(
         credito_id=credito.id,
         cuota_id=cuota.id,
         referencia=referencia,
-        wompi_link_id=link["id"],
+        wompi_link_id=None,
         monto_esperado=pendiente,
-        estado="PENDIENTE",
-        checkout_url=link["checkout_url"],
+        estado="CREANDO",
+        checkout_url=None,
     )
     db.add(intento)
     try:
         db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Ya existe un intento de pago para esta cuota; vuelve a consultar.") from exc
+    # The committed reservation survives a timeout or process crash, preventing
+    # an automatic second link even when Wompi's response was lost.
+    try:
+        link = crear_link_pago(referencia=referencia, credito_id=credito_id, numero_cuota=numero_cuota, monto=pendiente)
+    except Exception:
+        intento.estado = "INCIERTO"
+        db.commit()
+        raise HTTPException(status_code=503, detail="No se confirmó la creación del link. Se requiere revisión antes de otro intento.")
+    intento.wompi_link_id = link["id"]
+    intento.checkout_url = link["checkout_url"]
+    intento.estado = "PENDIENTE"
+    try:
+        db.commit()
     except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=500, detail="No se pudo guardar el link de pago generado.") from exc
+        raise HTTPException(status_code=503, detail="No se pudo confirmar el link creado. Se requiere revisión.") from exc
     return {
         "referencia": referencia,
         "credito_id": credito.id,
@@ -157,11 +175,18 @@ async def _recibir_evento(
     if event.get("event") != "transaction.updated":
         return {"recibido": True, "procesado": False}
 
-    transaction = (event.get("data") or {}).get("transaction") or {}
-    transaction_id = transaction.get("id")
+    event_transaction = (event.get("data") or {}).get("transaction") or {}
+    transaction_id = event_transaction.get("id") if isinstance(event_transaction, dict) else None
+    if not isinstance(transaction_id, str) or not transaction_id:
+        raise HTTPException(status_code=400, detail="El evento no identifica la transacción.")
+    if "transaction.id" not in event["signature"]["properties"]:
+        raise HTTPException(status_code=401, detail="La firma no protege el identificador de la transacción.")
+    # Fields absent from signature.properties must not determine the ledger.
+    # Wompi is the authority for link, currency, amount, and current status.
+    transaction = await run_in_threadpool(consultar_transaccion, transaction_id)
     link_id = transaction.get("payment_link_id")
-    if not isinstance(transaction_id, str) or not transaction_id or not isinstance(link_id, str) or not link_id:
-        raise HTTPException(status_code=400, detail="El evento no identifica la transacción y el link de pago.")
+    if not isinstance(link_id, str) or not link_id:
+        raise HTTPException(status_code=502, detail="Wompi no confirmó el link asociado a la transacción.")
 
     existing = db.query(WompiPago).filter(WompiPago.wompi_transaction_id == transaction_id).first()
     if existing:

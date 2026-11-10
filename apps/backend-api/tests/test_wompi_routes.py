@@ -2,6 +2,10 @@ import hashlib
 import os
 import datetime
 import json
+import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 
 import pytest
 
@@ -13,6 +17,7 @@ from decimal import Decimal
 from fastapi import HTTPException
 from starlette.requests import Request
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -56,7 +61,7 @@ def make_event(secret="test_events_route", status="APPROVED", transaction_id="ro
     return event
 
 
-def call_webhook(event, checksum=None, production=False):
+def call_webhook(event, checksum=None, production=False, provider=None):
     body = json.dumps(event).encode()
     received = False
 
@@ -72,12 +77,10 @@ def call_webhook(event, checksum=None, production=False):
     db = Session()
     try:
         handler = wompi_endpoint.recibir_evento_produccion if production else wompi_endpoint.recibir_evento_sandbox
-        coroutine = handler(request, db, checksum)
-        try:
-            coroutine.send(None)
-        except StopIteration as result:
-            return result.value
-        raise AssertionError("El handler de prueba pidió una operación asíncrona externa inesperada.")
+        authoritative = provider if provider is not None else event["data"]["transaction"].copy()
+        patch_args = {"side_effect": authoritative} if isinstance(authoritative, Exception) else {"return_value": authoritative}
+        with patch.object(wompi_endpoint, "consultar_transaccion", **patch_args):
+            return asyncio.run(handler(request, db, checksum))
     finally:
         db.close()
 
@@ -248,3 +251,186 @@ def test_crear_link_reutiliza_intento_pendiente(monkeypatch):
     finally:
         db.close()
     assert result["checkout_url"].endswith("route-link-001")
+
+
+def test_webhook_no_confia_en_link_ni_moneda_del_evento():
+    event = make_event()
+    provider = event["data"]["transaction"].copy()
+    provider["payment_link_id"] = "otro-link"
+    result = call_webhook(event, event["signature"]["checksum"], provider=provider)
+    assert result["procesado"] is False
+    db = Session()
+    try:
+        assert db.query(Pago).count() == 0
+    finally:
+        db.close()
+
+
+def test_webhook_rechaza_moneda_distinta_confirmada_por_wompi():
+    event = make_event()
+    provider = event["data"]["transaction"].copy()
+    provider["currency"] = "USD"
+    with pytest.raises(HTTPException) as exc:
+        call_webhook(event, event["signature"]["checksum"], provider=provider)
+    assert exc.value.status_code == 400
+
+
+def test_falla_consulta_wompi_no_aplica_pago():
+    event = make_event()
+    with pytest.raises(HTTPException) as exc:
+        call_webhook(event, event["signature"]["checksum"], provider=HTTPException(status_code=502, detail="No disponible"))
+    assert exc.value.status_code == 502
+    db = Session()
+    try:
+        assert db.query(Pago).count() == 0
+        assert db.query(CuotaAmortizacion).one().estado == "PENDIENTE"
+    finally:
+        db.close()
+
+
+def test_creacion_incierta_no_se_repite(monkeypatch):
+    db = Session()
+    try:
+        db.query(WompiPago).delete()
+        db.commit()
+        credit, quota, user = db.query(Credito).one(), db.query(CuotaAmortizacion).one(), db.query(Usuario).one()
+        calls = []
+        def unavailable(**_kwargs):
+            calls.append(1)
+            raise TimeoutError()
+        monkeypatch.setattr(wompi_endpoint, "crear_link_pago", unavailable)
+        with pytest.raises(HTTPException) as first:
+            wompi_endpoint.crear_link_para_cuota(credit.id, quota.id, db, user)
+        assert first.value.status_code == 503
+        with pytest.raises(HTTPException) as second:
+            wompi_endpoint.crear_link_para_cuota(credit.id, quota.id, db, user)
+        assert second.value.status_code == 409
+        assert len(calls) == 1
+        assert db.query(WompiPago).one().estado == "INCIERTO"
+    finally:
+        db.close()
+
+
+def test_falta_de_configuracion_no_deja_reserva_incierta(monkeypatch):
+    db = Session()
+    try:
+        db.query(WompiPago).delete()
+        db.commit()
+        monkeypatch.delenv("WOMPI_PRIVATE_KEY", raising=False)
+        with pytest.raises(HTTPException) as exc:
+            wompi_endpoint.crear_link_para_cuota(db.query(Credito).one().id, db.query(CuotaAmortizacion).one().id, db, db.query(Usuario).one())
+        assert exc.value.status_code == 503
+        assert db.query(WompiPago).count() == 0
+    finally:
+        db.close()
+
+
+def test_link_fallido_se_reutiliza_para_evitar_dos_links(monkeypatch):
+    db = Session()
+    try:
+        db.query(WompiPago).one().estado = "FALLIDO"
+        db.commit()
+        monkeypatch.setattr(wompi_endpoint, "crear_link_pago", lambda **_kwargs: pytest.fail("no generar otro link"))
+        result = wompi_endpoint.crear_link_para_cuota(db.query(Credito).one().id, db.query(CuotaAmortizacion).one().id, db, db.query(Usuario).one())
+        assert result["estado"] == "FALLIDO"
+    finally:
+        db.close()
+
+
+def test_base_impide_dos_reservas_abiertas_para_la_misma_cuota():
+    db = Session()
+    try:
+        original = db.query(WompiPago).one()
+        db.add(WompiPago(credito_id=original.credito_id, cuota_id=original.cuota_id,
+                         referencia="otra-referencia", monto_esperado=original.monto_esperado,
+                         estado="CREANDO"))
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+        assert db.query(WompiPago).count() == 1
+    finally:
+        db.close()
+
+
+def test_no_reutiliza_link_si_el_saldo_cambio(monkeypatch):
+    db = Session()
+    try:
+        quota = db.query(CuotaAmortizacion).one()
+        quota.monto_pagado = Decimal("1.00")
+        db.commit()
+        monkeypatch.setattr(wompi_endpoint, "crear_link_pago", lambda **_kwargs: pytest.fail("no generar otro link"))
+        with pytest.raises(HTTPException) as exc:
+            wompi_endpoint.crear_link_para_cuota(db.query(Credito).one().id, quota.id, db, db.query(Usuario).one())
+        assert exc.value.status_code == 409
+        assert "saldo cambió" in exc.value.detail
+    finally:
+        db.close()
+
+
+def test_evento_sin_id_firmado_no_puede_iniciar_consulta():
+    event = make_event()
+    event["signature"]["properties"] = ["transaction.status", "transaction.amount_in_cents"]
+    event["signature"]["checksum"] = hashlib.sha256(b"APPROVED1250001792600000test_events_route").hexdigest()
+    with pytest.raises(HTTPException) as exc:
+        call_webhook(event, event["signature"]["checksum"])
+    assert exc.value.status_code == 401
+
+
+def test_dos_peticiones_simultaneas_no_crean_dos_links(tmp_path, monkeypatch):
+    local_engine = create_engine(f"sqlite:///{(tmp_path / 'pagos.sqlite').as_posix()}",
+                                 connect_args={"check_same_thread": False})
+    Base.metadata.create_all(local_engine)
+    LocalSession = sessionmaker(bind=local_engine, autoflush=False, autocommit=False)
+    db = LocalSession()
+    try:
+        user = Usuario(email="cliente@prueba.invalid", password_hash="x", rol="CLIENTE", activo=True)
+        db.add(user)
+        db.flush()
+        person = Cliente(nombre="Cliente prueba", cedula="123456789", telefono="3000000000", usuario_id=user.id)
+        db.add(person)
+        db.flush()
+        credit = Credito(cliente_id=person.id, monto=Decimal("1250.00"), plazo_meses=1,
+                         tasa_interes=Decimal("0"), estado="DESEMBOLSADO")
+        db.add(credit)
+        db.flush()
+        quota = CuotaAmortizacion(credito_id=credit.id, numero_cuota=1,
+            fecha_vencimiento=datetime.datetime(2026, 12, 1), monto_cuota=Decimal("1250.00"),
+            capital=Decimal("1250.00"), interes=Decimal("0"), saldo_remanente=Decimal("0"),
+            monto_pagado=Decimal("0"), estado="PENDIENTE")
+        db.add(quota)
+        db.commit()
+        credit_id, quota_id, user_id = credit.id, quota.id, user.id
+    finally:
+        db.close()
+
+    started, finish = threading.Event(), threading.Event()
+    calls = []
+    def create_fake_link(**_kwargs):
+        calls.append(1)
+        started.set()
+        assert finish.wait(5)
+        return {"id": "link-unico", "checkout_url": "https://checkout.wompi.co/l/link-unico", "ambiente": "sandbox"}
+    monkeypatch.setattr(wompi_endpoint, "crear_link_pago", create_fake_link)
+
+    def request_link():
+        session = LocalSession()
+        try:
+            return wompi_endpoint.crear_link_para_cuota(credit_id, quota_id, session, session.get(Usuario, user_id))
+        finally:
+            session.close()
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(request_link)
+            assert started.wait(5)
+            second = pool.submit(request_link)
+            try:
+                with pytest.raises(HTTPException) as exc:
+                    second.result(timeout=5)
+                assert exc.value.status_code == 409
+            finally:
+                finish.set()
+            assert first.result(timeout=5)["checkout_url"].endswith("link-unico")
+        assert len(calls) == 1
+    finally:
+        local_engine.dispose()

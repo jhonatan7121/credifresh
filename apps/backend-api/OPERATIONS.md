@@ -119,6 +119,35 @@ operación y queda auditada.
 
 ## Wompi: Sandbox y producción
 
+### Validaciones antes de instalar la protección de recaudo
+
+La migración `c6130a57e241` requiere revisar el entorno seleccionado y su base
+antes de desplegar. Falla deliberadamente si una cuota tiene más de un intento
+en `CREANDO`, `INCIERTO`, `PENDIENTE` o `FALLIDO`; no borres ni modifiques
+esos registros sin consultar y conciliar los enlaces y transacciones en Wompi.
+El siguiente chequeo es de solo lectura y devuelve únicamente la cantidad:
+
+```sql
+SELECT COUNT(*) FROM (
+  SELECT cuota_id FROM wompi_pagos
+  WHERE estado IN ('CREANDO', 'INCIERTO', 'PENDIENTE', 'FALLIDO')
+  GROUP BY cuota_id HAVING COUNT(*) > 1
+) AS cuotas_con_intentos_duplicados;
+```
+
+Usa la base aislada correspondiente y verifica una copia recuperable antes de
+cualquier migración. Una reserva `CREANDO` o `INCIERTO` bloquea nuevas
+creaciones: revisar manualmente Wompi antes de decidir qué hacer. Una respuesta
+no confirmada no implica que Wompi no haya creado el enlace. La reversión de la
+migración también queda bloqueada si hay reservas sin enlace confirmado.
+
+El evento de recaudo requiere la consulta autenticada de la transacción a
+Wompi y confirma identificador, link, estado, moneda y monto. Si la consulta no
+devuelve un link o falla, el pago no se aplica. Antes de instalar este cambio,
+verifica con una transacción Sandbox que la respuesta de consulta incluya el
+`payment_link_id` esperado; valida además los reintentos de notificaciones y la
+reconciliación manual. No habilites producción solo por pasar las pruebas locales.
+
 El servicio `credifresh-wompi-sandbox` es exclusivamente para pruebas y usa
 SQLite efímera, registros sintéticos y llaves `prv_test_` / `test_events_`.
 No le agregues llaves de producción ni cambies su ambiente.

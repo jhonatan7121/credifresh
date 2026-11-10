@@ -4,6 +4,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+import urllib.parse
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -54,6 +55,11 @@ def _events_secret() -> tuple[str, str]:
     return environment, events_secret
 
 
+def verificar_configuracion_recaudo() -> None:
+    """Validate the environment and key before persisting a reservation."""
+    _private_key()
+
+
 def crear_link_pago(*, referencia: str, credito_id: int, numero_cuota: int, monto: Decimal) -> dict:
     environment, private_key, api_base = _private_key()
     amount_in_cents = int((Decimal(str(monto)) * 100).quantize(Decimal("1")))
@@ -102,6 +108,27 @@ def crear_link_pago(*, referencia: str, credito_id: int, numero_cuota: int, mont
     }
 
 
+def consultar_transaccion(transaction_id: str) -> dict:
+    """Read authoritative transaction data from Wompi using the backend key."""
+    _, private_key, api_base = _private_key()
+    if not isinstance(transaction_id, str) or not transaction_id or len(transaction_id) > 128:
+        raise HTTPException(status_code=400, detail="Identificador de transacción inválido.")
+    request = urllib.request.Request(
+        f"{api_base}/transactions/{urllib.parse.quote(transaction_id, safe='')}",
+        headers={"Authorization": f"Bearer {private_key}", "Accept": "application/json"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+        raise HTTPException(status_code=502, detail="No fue posible confirmar la transacción con Wompi.") from exc
+    transaction = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(transaction, dict) or transaction.get("id") != transaction_id:
+        raise HTTPException(status_code=502, detail="Wompi no devolvió una transacción verificable.")
+    return transaction
+
+
 def _property_value(event: dict, property_path: str):
     parts = property_path.split(".")
     value = event.get("data", {})
@@ -127,6 +154,8 @@ def validar_firma_evento(event: dict, header_checksum: str | None = None) -> boo
     timestamp = event.get("timestamp")
     body_checksum = signature.get("checksum")
     if not isinstance(properties, list) or not properties or not isinstance(timestamp, (int, str)):
+        return False
+    if any(not isinstance(path, str) or not path for path in properties):
         return False
     if not isinstance(body_checksum, str) or not body_checksum:
         return False

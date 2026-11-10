@@ -3,7 +3,7 @@ import hashlib
 import pytest
 from fastapi import HTTPException
 
-from app.services.wompi_service import crear_link_pago, validar_firma_evento
+from app.services.wompi_service import consultar_transaccion, crear_link_pago, validar_firma_evento
 
 
 def make_event(secret: str, environment: str = "test"):
@@ -176,3 +176,23 @@ def test_link_produccion_usa_api_y_llave_de_produccion(monkeypatch):
     assert request.get_header("Authorization") == "Bearer prv_prod_fake"
     assert json.loads(request.data.decode())["sku"] == "internal-ref"
     assert result["ambiente"] == "production"
+
+
+def test_consulta_transaccion_usa_llave_privada_y_valida_id(monkeypatch):
+    from unittest.mock import patch
+    class FakeResponse:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def read(self): return b'{"data":{"id":"tx-1","payment_link_id":"link-1","currency":"COP"}}'
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    monkeypatch.setenv("WOMPI_ENVIRONMENT", "sandbox")
+    monkeypatch.setenv("WOMPI_PRIVATE_KEY", "prv_test_fake")
+    with patch("app.services.wompi_service.urllib.request.urlopen", return_value=FakeResponse()) as urlopen:
+        assert consultar_transaccion("tx-1")["payment_link_id"] == "link-1"
+    request = urlopen.call_args.args[0]
+    assert request.full_url == "https://sandbox.wompi.co/v1/transactions/tx-1"
+    assert request.get_header("Authorization") == "Bearer prv_test_fake"
+    with patch("app.services.wompi_service.urllib.request.urlopen", return_value=FakeResponse()):
+        with pytest.raises(HTTPException) as exc:
+            consultar_transaccion("otro-id")
+    assert exc.value.status_code == 502
