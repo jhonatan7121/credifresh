@@ -26,6 +26,7 @@ from app.models.credito import Credito
 from app.models.usuario import Usuario
 from app.models.wompi_pago import WompiPago
 from app.models.pago import Pago
+from app.models.audit_log import AuditLog
 
 
 def isolated_engine():
@@ -236,5 +237,51 @@ def test_webhook_y_reconciliacion_simultaneos_aplican_un_solo_pago(monkeypatch):
         with Session() as session:
             assert session.query(Pago).filter_by(credito_id=credit_id, cuota_id=quota_id).count() == 1
             assert session.get(CuotaAmortizacion, quota_id).monto_pagado == Decimal("1250.00")
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(not os.getenv("POSTGRES_TEST_DATABASE_URL"), reason="Requiere PostgreSQL local aislado")
+def test_cambio_de_estado_concurrente_registra_una_sola_alerta():
+    engine = isolated_engine()
+    Session = sessionmaker(bind=engine, autoflush=False)
+    unique = uuid4().hex
+    transaction = {"id": f"tx-{unique}", "payment_link_id": f"link-{unique}",
+                   "status": "VOIDED", "amount_in_cents": 125000, "currency": "COP"}
+    try:
+        with Session() as db:
+            user = Usuario(email=f"alert-{unique}@example.invalid", password_hash="x", rol="CLIENTE", activo=True)
+            db.add(user)
+            db.flush()
+            person = Cliente(nombre="Prueba", cedula=unique[:12], telefono="3000000000", usuario_id=user.id)
+            db.add(person)
+            db.flush()
+            credit = Credito(cliente_id=person.id, monto=Decimal("1250"), plazo_meses=1, tasa_interes=Decimal("0"), estado="DESEMBOLSADO")
+            db.add(credit)
+            db.flush()
+            quota = CuotaAmortizacion(credito_id=credit.id, numero_cuota=1, fecha_vencimiento=datetime.datetime(2026, 12, 1),
+                monto_cuota=Decimal("1250"), capital=Decimal("1250"), interes=Decimal("0"), saldo_remanente=Decimal("0"),
+                monto_pagado=Decimal("1250"), estado="PAGADA")
+            db.add(quota)
+            db.flush()
+            attempt = WompiPago(credito_id=credit.id, cuota_id=quota.id, referencia=unique,
+                wompi_link_id=transaction["payment_link_id"], wompi_transaction_id=transaction["id"],
+                monto_esperado=Decimal("1250"), estado="PAGADO", checkout_url=f"https://example.invalid/{unique}")
+            db.add(attempt)
+            db.flush()
+            attempt_id, quota_id = attempt.id, quota.id
+            db.commit()
+        start = threading.Barrier(2, timeout=10)
+        def process():
+            with Session() as session:
+                start.wait()
+                return endpoint._aplicar_transaccion_verificada(session, transaction, "sandbox")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first, second = pool.submit(process), pool.submit(process)
+            assert first.result(timeout=20)["requiere_revision"]
+            assert second.result(timeout=20)["requiere_revision"]
+        with Session() as db:
+            assert db.query(AuditLog).filter_by(accion="ALERTA_CAMBIO_ESTADO_WOMPI", entidad="wompi_pago", entidad_id=attempt_id).count() == 1
+            assert db.get(CuotaAmortizacion, quota_id).monto_pagado == Decimal("1250.00")
     finally:
         engine.dispose()

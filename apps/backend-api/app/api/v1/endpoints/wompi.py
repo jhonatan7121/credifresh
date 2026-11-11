@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.core.deps import RoleChecker, get_current_active_user
 from app.models.amortizacion import CuotaAmortizacion
+from app.models.audit_log import AuditLog
 from app.models.cliente import Cliente
 from app.models.credito import Credito
 from app.models.pago import Pago
@@ -61,6 +62,51 @@ def reconciliar_cuota_sandbox(
     if not intento:
         raise HTTPException(status_code=409, detail="La transacción no corresponde al link registrado para esta cuota.")
     return _aplicar_transaccion_verificada(db, transaction, "sandbox", actor=current_user)
+
+
+@router.get("/sandbox/creditos/{credito_id}/cuotas/{cuota_id}/comparar")
+def comparar_cuota_sandbox(
+    credito_id: int, cuota_id: int,
+    db: Session = Depends(get_db), current_user: Usuario = Depends(RoleChecker(["ADMIN"]))
+):
+    """Compare a recorded attempt with Wompi; never change the ledger or infer bank settlement."""
+    _exigir_sandbox_recaudo()
+    cuota = db.query(CuotaAmortizacion).filter_by(id=cuota_id, credito_id=credito_id).first()
+    if not cuota:
+        raise HTTPException(status_code=404, detail="Crédito o cuota no encontrados.")
+    intento = (db.query(WompiPago).filter_by(credito_id=credito_id, cuota_id=cuota_id)
+               .order_by(WompiPago.id.desc()).first())
+    pagos = db.query(Pago).filter_by(credito_id=credito_id, cuota_id=cuota_id, metodo_pago="WOMPI_SANDBOX").all()
+    total = sum((Decimal(str(pago.monto_pagado)) for pago in pagos), Decimal("0"))
+    result = {
+        "credito_id": credito_id, "cuota_id": cuota_id, "estado_cuota": cuota.estado,
+        "monto_cuota": str(cuota.monto_cuota), "monto_pagado_cuota": str(cuota.monto_pagado),
+        "pagos_wompi_registrados": len(pagos), "total_pagos_wompi": str(total),
+        "estado_intento": intento.estado if intento else None,
+        "estado_wompi": None, "resultado": "REQUIERE_REVISION",
+        "motivos": [], "abono_bancario_verificado": False, "reembolsos_verificados": False,
+    }
+    if not intento or not intento.wompi_transaction_id:
+        result["motivos"].append("SIN_TRANSACCION_REGISTRADA_EN_CREDIFRESH")
+        return result
+    transaccion = consultar_transaccion(intento.wompi_transaction_id)
+    result["estado_wompi"] = transaccion.get("status")
+    if transaccion.get("payment_link_id") != intento.wompi_link_id:
+        result["motivos"].append("ENLACE_NO_COINCIDE")
+    cents = transaccion.get("amount_in_cents")
+    expected = int((Decimal(str(intento.monto_esperado)) * 100).quantize(Decimal("1")))
+    if type(cents) is not int or cents != expected or transaccion.get("currency") != "COP":
+        result["motivos"].append("MONTO_O_MONEDA_NO_COINCIDE")
+    if transaccion.get("status") != "APPROVED" or intento.estado != "PAGADO":
+        result["motivos"].append("ESTADO_NO_CONFIRMADO_O_CAMBIO_DE_ESTADO")
+    if len(pagos) != 1 or total != Decimal(str(intento.monto_esperado)):
+        result["motivos"].append("PAGOS_LOCALES_NO_COINCIDEN")
+    if (cuota.estado != "PAGADA" or Decimal(str(cuota.monto_pagado)) != total or
+            Decimal(str(cuota.monto_cuota)) != Decimal(str(intento.monto_esperado))):
+        result["motivos"].append("SALDO_CUOTA_NO_COINCIDE_CON_PAGOS_WOMPI")
+    if not result["motivos"]:
+        result["resultado"] = "COINCIDE_RECAUDO_NO_CONCILIACION_BANCARIA"
+    return result
 
 
 @router.post("/creditos/{credito_id}/cuotas/{cuota_id}/link", status_code=201)
@@ -238,8 +284,25 @@ def _aplicar_transaccion_verificada(db: Session, transaction: dict, expected_env
     if not isinstance(link_id, str) or not link_id:
         raise HTTPException(status_code=502, detail="Wompi no confirmó el link asociado a la transacción.")
 
-    existing = db.query(WompiPago).filter(WompiPago.wompi_transaction_id == transaction_id).first()
+    existing = db.query(WompiPago).filter(WompiPago.wompi_transaction_id == transaction_id).with_for_update().first()
     if existing:
+        estado = transaction.get("status")
+        consistent = ((existing.estado == "PAGADO" and estado == "APPROVED") or
+                      (existing.estado == "FALLIDO" and estado in {"DECLINED", "ERROR", "VOIDED"}))
+        if transaction.get("payment_link_id") != existing.wompi_link_id:
+            raise HTTPException(status_code=409, detail="El link de la transacción cambió; requiere revisión.")
+        if not consistent:
+            action = "ALERTA_CAMBIO_ESTADO_WOMPI"
+            already_alerted = db.query(AuditLog).filter_by(
+                accion=action, entidad="wompi_pago", entidad_id=existing.id, resultado="REQUIERE_REVISION"
+            ).first()
+            if not already_alerted:
+                registrar_auditoria(db=db, usuario=actor, accion=action, entidad="wompi_pago",
+                    entidad_id=existing.id, resultado="REQUIERE_REVISION",
+                    detalles={"credito_id": existing.credito_id, "cuota_id": existing.cuota_id,
+                              "estado_local": existing.estado, "estado_wompi": estado})
+                db.commit()
+            return {"recibido": True, "procesado": False, "requiere_revision": True}
         return {"recibido": True, "procesado": True, "duplicado": True}
 
     intento = db.query(WompiPago).filter(WompiPago.wompi_link_id == link_id).with_for_update().first()

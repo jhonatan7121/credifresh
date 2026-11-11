@@ -159,6 +159,23 @@ transacción. No acepta estado o monto enviados por el cliente. Esta herramienta
 no cubre enlaces cuyo ID no se haya guardado, reembolsos ni la conciliación
 periódica bancaria, y permanece bloqueada fuera de Sandbox.
 
+Para una cuota de Sandbox, `GET /integraciones/wompi/sandbox/creditos/{credito_id}/cuotas/{cuota_id}/comparar`
+permite a un ADMIN contrastar la última transacción conocida con la cuota y los
+pagos locales. La consulta no modifica datos, consulta Wompi mediante credencial
+privada del backend y señala las diferencias. Aun cuando indique que coinciden
+los datos de recaudo, no verifica reembolsos ni que exista abono en el banco;
+estos campos siempre se muestran como no verificados. Si falta el identificador
+de la transacción, indica revisión y no presume que no hubo cobro.
+
+Cuando una transacción previamente registrada cambia de estado en la consulta a
+Wompi, el webhook o la reconciliación dejan una alerta `ALERTA_CAMBIO_ESTADO_WOMPI`
+en la auditoría para revisión manual. No generan automáticamente un reembolso,
+no borran el pago y no cambian el saldo de la cuota: el efecto sobre la cartera
+debe quedar definido y verificado antes de permitir una reversión. Wompi ofrece
+reembolsos Sandbox V2, pero el contrato de consulta de su resultado, la
+identificación del reembolso parcial y la política contable deben confirmarse
+antes de automatizar el flujo. No habilitar dinero real con estas limitaciones.
+
 El evento de recaudo requiere la consulta autenticada de la transacción a
 Wompi y confirma identificador, link, estado, moneda y monto. Si la consulta no
 devuelve un link o falla, el pago no se aplica. Antes de instalar este cambio,

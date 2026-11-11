@@ -367,6 +367,72 @@ def test_reconciliacion_requiere_admin(client, monkeypatch):
     assert client.get("/integraciones/wompi/sandbox/revision-enlaces").status_code == 403
 
 
+def test_pago_ya_aplicado_con_estado_cambiado_genera_alerta_sin_alterar_saldo():
+    approved = make_event()
+    assert call_webhook(approved, approved["signature"]["checksum"])["estado"] == "PAGADO"
+    voided = make_event(status="VOIDED")
+    assert call_webhook(voided, voided["signature"]["checksum"])["requiere_revision"] is True
+    assert call_webhook(voided, voided["signature"]["checksum"])["requiere_revision"] is True
+    db = Session()
+    try:
+        quota = db.query(CuotaAmortizacion).one()
+        assert quota.estado == "PAGADA" and quota.monto_pagado == Decimal("1250.00")
+        assert db.query(Pago).count() == 1
+        assert db.query(AuditLog).filter_by(accion="ALERTA_CAMBIO_ESTADO_WOMPI", resultado="REQUIERE_REVISION").count() == 1
+    finally:
+        db.close()
+
+
+def test_comparacion_sandbox_muestra_coincidencias_y_alerta_cambio(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "sandbox")
+    approved = make_event()
+    call_webhook(approved, approved["signature"]["checksum"])
+    provider = approved["data"]["transaction"].copy()
+    monkeypatch.setattr(wompi_endpoint, "consultar_transaccion", lambda _id: provider)
+    db = Session()
+    try:
+        quota = db.query(CuotaAmortizacion).one()
+        ok = wompi_endpoint.comparar_cuota_sandbox(quota.credito_id, quota.id, db, db.query(Usuario).one())
+        assert ok["resultado"] == "COINCIDE_RECAUDO_NO_CONCILIACION_BANCARIA"
+        assert ok["abono_bancario_verificado"] is False and ok["reembolsos_verificados"] is False
+        provider["status"] = "VOIDED"
+        changed = wompi_endpoint.comparar_cuota_sandbox(quota.credito_id, quota.id, db, db.query(Usuario).one())
+        assert changed["resultado"] == "REQUIERE_REVISION"
+        assert "ESTADO_NO_CONFIRMADO_O_CAMBIO_DE_ESTADO" in changed["motivos"]
+        provider["status"] = "APPROVED"
+        provider["amount_in_cents"] = 125001
+        assert "MONTO_O_MONEDA_NO_COINCIDE" in wompi_endpoint.comparar_cuota_sandbox(quota.credito_id, quota.id, db, db.query(Usuario).one())["motivos"]
+        provider["amount_in_cents"] = 125000
+        quota.estado = "PENDIENTE"
+        assert "SALDO_CUOTA_NO_COINCIDE_CON_PAGOS_WOMPI" in wompi_endpoint.comparar_cuota_sandbox(quota.credito_id, quota.id, db, db.query(Usuario).one())["motivos"]
+        assert db.query(Pago).count() == 1 and quota.monto_pagado == Decimal("1250.00")
+    finally:
+        db.close()
+
+
+def test_comparacion_no_inventa_transaccion_y_requiere_admin(client, monkeypatch):
+    from app.core.deps import get_current_active_user
+    from main import app
+    from types import SimpleNamespace
+    monkeypatch.setenv("ENVIRONMENT", "sandbox")
+    monkeypatch.setattr(wompi_endpoint, "consultar_transaccion", lambda _id: pytest.fail("no hay ID para consultar"))
+    db = Session()
+    try:
+        quota = db.query(CuotaAmortizacion).one()
+        result = wompi_endpoint.comparar_cuota_sandbox(quota.credito_id, quota.id, db, db.query(Usuario).one())
+        assert result["resultado"] == "REQUIERE_REVISION"
+        assert result["motivos"] == ["SIN_TRANSACCION_REGISTRADA_EN_CREDIFRESH"]
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        with pytest.raises(HTTPException) as exc:
+            wompi_endpoint.comparar_cuota_sandbox(quota.credito_id, quota.id, db, db.query(Usuario).one())
+        assert exc.value.status_code == 404
+    finally:
+        db.close()
+    monkeypatch.setenv("ENVIRONMENT", "sandbox")
+    app.dependency_overrides[get_current_active_user] = lambda: SimpleNamespace(id=42, rol="CLIENTE", activo=True)
+    assert client.get("/integraciones/wompi/sandbox/creditos/1/cuotas/1/comparar").status_code == 403
+
+
 def test_creacion_incierta_no_se_repite(monkeypatch):
     db = Session()
     try:
