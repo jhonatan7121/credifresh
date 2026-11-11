@@ -345,6 +345,27 @@ async def _recibir_evento(
         raise HTTPException(status_code=400, detail="El ambiente del evento no coincide con este endpoint.")
     if not validar_firma_evento(event, x_event_checksum):
         raise HTTPException(status_code=401, detail="La firma del evento de Wompi no es válida.")
+    if event.get("event") == "refund.updated" and expected_environment == "sandbox":
+        _exigir_sandbox_recaudo()
+        event_data = event.get("data")
+        refund = event_data.get("refund") if isinstance(event_data, dict) else None
+        signed = event["signature"]["properties"]
+        if not isinstance(refund, dict) or not {"refund.id", "refund.status", "refund.amount_in_cents"}.issubset(signed):
+            raise HTTPException(status_code=401, detail="La firma no protege los datos mínimos del reembolso.")
+        refund_id, status, amount = refund.get("id"), refund.get("status"), refund.get("amount_in_cents")
+        if (type(refund_id) is not int or not 0 < refund_id <= 2147483647
+                or not isinstance(status, str) or status not in {"APPROVED", "DECLINED", "ERROR", "CANCELLED"}
+                or type(amount) is not int or amount <= 0):
+            raise HTTPException(status_code=400, detail="Datos firmados del reembolso no válidos.")
+        # The observed signature does not cover transaction_id. Record the
+        # signed facts only; never associate a refund with a payment or modify
+        # the ledger without an independently verified provider lookup.
+        registrar_auditoria(db=db, usuario=None, accion="EVENTO_REEMBOLSO_WOMPI_SANDBOX",
+            entidad="wompi_reembolso", entidad_id=refund_id, resultado="REQUIERE_REVISION",
+            detalles={"estado_wompi": status, "monto_centavos": amount,
+                      "transaccion_verificada": False})
+        db.commit()
+        return {"recibido": True, "procesado": False, "requiere_revision": True}
     if event.get("event") != "transaction.updated":
         return {"recibido": True, "procesado": False}
 

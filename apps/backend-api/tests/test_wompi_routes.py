@@ -88,6 +88,29 @@ def call_webhook(event, checksum=None, production=False, provider=None):
         db.close()
 
 
+def test_evento_reembolso_firmado_se_registra_sin_modificar_cartera(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "sandbox")
+    event = {"event": "refund.updated", "environment": "test", "timestamp": 1794439585,
+             "data": {"refund": {"id": 32935, "status": "APPROVED", "amount_in_cents": 100000,
+                                  "transaction_id": "no-protegido-por-la-firma"}},
+             "signature": {"properties": ["refund.id", "refund.status", "refund.amount_in_cents"]}}
+    event["signature"]["checksum"] = hashlib.sha256(
+        b"32935APPROVED1000001794439585test_events_route").hexdigest()
+    result = call_webhook(event, provider={})
+    assert result == {"recibido": True, "procesado": False, "requiere_revision": True}
+    with Session() as db:
+        audit = db.query(AuditLog).filter_by(accion="EVENTO_REEMBOLSO_WOMPI_SANDBOX").one()
+        assert audit.entidad_id == 32935
+        assert json.loads(audit.detalles) == {"estado_wompi": "APPROVED", "monto_centavos": 100000,
+                                             "transaccion_verificada": False}
+        assert db.query(Pago).count() == 0
+        assert db.query(WompiReembolsoSandbox).count() == 0
+    event["data"]["refund"]["amount_in_cents"] = 200000
+    with pytest.raises(HTTPException) as exc:
+        call_webhook(event, provider={})
+    assert exc.value.status_code == 401
+
+
 def setup_function():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
