@@ -1,9 +1,10 @@
 import secrets
 import os
 from decimal import Decimal
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -17,7 +18,8 @@ from app.models.credito import Credito
 from app.models.pago import Pago
 from app.models.usuario import Usuario
 from app.models.wompi_pago import WompiPago
-from app.services.wompi_service import consultar_transaccion, crear_link_pago, get_wompi_environment, validar_firma_evento, verificar_configuracion_recaudo
+from app.models.wompi_reembolso import WompiReembolsoSandbox
+from app.services.wompi_service import consultar_transaccion, crear_link_pago, get_wompi_environment, solicitar_reembolso_sandbox, validar_firma_evento, verificar_configuracion_recaudo
 from modules.audit.audit_service import registrar_auditoria
 
 
@@ -28,9 +30,87 @@ class ReconciliacionSandbox(BaseModel):
     transaction_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
 
 
+class ReembolsoSandboxInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    monto_centavos: int = Field(gt=0, strict=True)
+    escenario: Literal["approved", "declined", "error", "cancelled"]
+
+
 def _exigir_sandbox_recaudo():
     if os.getenv("ENVIRONMENT", "").strip().lower() != "sandbox" or get_wompi_environment() != "sandbox":
         raise HTTPException(status_code=404, detail="Reconciliación disponible únicamente en Sandbox.")
+
+
+def _resumen_reembolso(row: WompiReembolsoSandbox) -> dict:
+    return {"reembolso_id": row.id, "referencia": row.referencia, "monto": str(row.monto),
+            "escenario": row.escenario, "estado": row.estado, "estado_wompi": row.estado_proveedor,
+            "wompi_reembolso_id": row.wompi_reembolso_id, "requiere_revision": True,
+            "saldo_cartera_modificado": False, "ambiente": "sandbox"}
+
+
+@router.get("/sandbox/creditos/{credito_id}/cuotas/{cuota_id}/reembolso")
+def consultar_reembolso_de_prueba(
+    credito_id: int, cuota_id: int, db: Session = Depends(get_db),
+    current_user: Usuario = Depends(RoleChecker(["ADMIN"]))
+):
+    _exigir_sandbox_recaudo()
+    row = (db.query(WompiReembolsoSandbox).join(WompiPago)
+           .filter(WompiPago.credito_id == credito_id, WompiPago.cuota_id == cuota_id)
+           .order_by(WompiReembolsoSandbox.id.desc()).first())
+    if not row:
+        raise HTTPException(status_code=404, detail="No hay solicitud de reembolso de prueba para la cuota.")
+    return _resumen_reembolso(row)
+
+
+@router.post("/sandbox/creditos/{credito_id}/cuotas/{cuota_id}/reembolso")
+def crear_reembolso_de_prueba(
+    credito_id: int, cuota_id: int, datos: ReembolsoSandboxInput,
+    db: Session = Depends(get_db), current_user: Usuario = Depends(RoleChecker(["ADMIN"]))
+):
+    """Submit at most one simulated refund per Wompi payment; never alter the debt."""
+    _exigir_sandbox_recaudo()
+    attempt = (db.query(WompiPago).filter_by(credito_id=credito_id, cuota_id=cuota_id, estado="PAGADO")
+               .order_by(WompiPago.id.desc()).with_for_update().first())
+    if not attempt or not attempt.wompi_transaction_id or not attempt.wompi_link_id:
+        raise HTTPException(status_code=409, detail="No hay un pago Wompi confirmado para esta cuota.")
+    previous = db.query(WompiReembolsoSandbox).filter_by(wompi_pago_id=attempt.id).first()
+    if previous:
+        if int((Decimal(str(previous.monto)) * 100).quantize(Decimal("1"))) != datos.monto_centavos or previous.escenario != datos.escenario:
+            raise HTTPException(status_code=409, detail="Ya existe una solicitud diferente para este pago; requiere revisión.")
+        return {**_resumen_reembolso(previous), "ya_existia": True}
+    local_payments = db.query(Pago).filter_by(credito_id=credito_id, cuota_id=cuota_id, metodo_pago="WOMPI_SANDBOX").all()
+    expected = int((Decimal(str(attempt.monto_esperado)) * 100).quantize(Decimal("1")))
+    if (len(local_payments) != 1 or Decimal(str(local_payments[0].monto_pagado)) != Decimal(str(attempt.monto_esperado))
+            or datos.monto_centavos > expected):
+        raise HTTPException(status_code=409, detail="Monto o registros de pago no coinciden; requiere revisión.")
+    transaction = consultar_transaccion(attempt.wompi_transaction_id)
+    if (transaction.get("status") != "APPROVED" or transaction.get("payment_link_id") != attempt.wompi_link_id
+            or transaction.get("currency") != "COP" or type(transaction.get("amount_in_cents")) is not int
+            or transaction.get("amount_in_cents") != expected):
+        raise HTTPException(status_code=409, detail="Wompi no confirmó el pago original; requiere revisión.")
+    row = WompiReembolsoSandbox(wompi_pago_id=attempt.id, referencia=secrets.token_hex(16),
+        monto=Decimal(datos.monto_centavos) / 100, escenario=datos.escenario, estado="CREANDO")
+    db.add(row)
+    registrar_auditoria(db=db, usuario=current_user, accion="INICIAR_REEMBOLSO_WOMPI_SANDBOX",
+        entidad="credito", entidad_id=credito_id, detalles={"cuota_id": cuota_id, "referencia": row.referencia})
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Ya existe una solicitud para este pago; no se enviará otra.") from exc
+    try:
+        result = solicitar_reembolso_sandbox(transaction_id=attempt.wompi_transaction_id,
+            amount_in_cents=datos.monto_centavos, reference=row.referencia, scenario=datos.escenario)
+        row.estado_proveedor, row.wompi_reembolso_id = result["status"], result["refund_id"]
+        row.estado = "CONFIRMADO" if result["status"] == "APPROVED" else "NO_APROBADO"
+    except Exception:
+        # A timeout or malformed response cannot prove that Wompi did not execute it.
+        row.estado = "INCIERTO"
+    registrar_auditoria(db=db, usuario=current_user, accion="RESULTADO_REEMBOLSO_WOMPI_SANDBOX",
+        entidad="credito", entidad_id=credito_id, resultado="REQUIERE_REVISION",
+        detalles={"cuota_id": cuota_id, "referencia": row.referencia, "estado": row.estado})
+    db.commit()
+    return {**_resumen_reembolso(row), "ya_existia": False}
 
 
 @router.get("/sandbox/revision-enlaces")
@@ -89,6 +169,10 @@ def comparar_cuota_sandbox(
     if not intento or not intento.wompi_transaction_id:
         result["motivos"].append("SIN_TRANSACCION_REGISTRADA_EN_CREDIFRESH")
         return result
+    refund = db.query(WompiReembolsoSandbox).filter_by(wompi_pago_id=intento.id).first()
+    if refund:
+        result["estado_reembolso_local"] = refund.estado
+        result["motivos"].append("REEMBOLSO_DE_PRUEBA_REQUIERE_REVISION")
     transaccion = consultar_transaccion(intento.wompi_transaction_id)
     result["estado_wompi"] = transaccion.get("status")
     if transaccion.get("payment_link_id") != intento.wompi_link_id:

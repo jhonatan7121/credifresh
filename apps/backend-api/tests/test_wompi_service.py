@@ -3,7 +3,36 @@ import hashlib
 import pytest
 from fastapi import HTTPException
 
-from app.services.wompi_service import consultar_transaccion, crear_link_pago, validar_firma_evento
+from app.services.wompi_service import consultar_transaccion, crear_link_pago, solicitar_reembolso_sandbox, validar_firma_evento
+
+
+def test_reembolso_usa_solo_api_sandbox_y_valida_respuesta(monkeypatch):
+    import json
+    from app.services import wompi_service
+    monkeypatch.setenv("ENVIRONMENT", "sandbox")
+    monkeypatch.setenv("WOMPI_ENVIRONMENT", "sandbox")
+    monkeypatch.setenv("WOMPI_PRIVATE_KEY", "prv_test_ficticia")
+    calls = []
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def read(self):
+            return json.dumps({"data": {"id": 42, "transaction_id": "tx-prueba", "reference": "ref-prueba",
+                "amount_in_cents": 1200, "status": "APPROVED", "v2_refund_id": "refund-test"}}).encode()
+    def fake_open(req, timeout):
+        calls.append((req.full_url, json.loads(req.data), timeout))
+        return Response()
+    monkeypatch.setattr(wompi_service.urllib.request, "urlopen", fake_open)
+    result = solicitar_reembolso_sandbox(transaction_id="tx-prueba", amount_in_cents=1200, reference="ref-prueba", scenario="approved")
+    assert result == {"status": "APPROVED", "refund_id": "refund-test"}
+    assert calls[0][0] == "https://sandbox.wompi.co/v1/refunds"
+    assert calls[0][1]["test_scenario"] == "approved" and calls[0][1]["amount_in_cents"] == 1200
+    with pytest.raises(HTTPException):
+        solicitar_reembolso_sandbox(transaction_id="tx-prueba", amount_in_cents=1100, reference="ref-prueba", scenario="approved")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    with pytest.raises(HTTPException):
+        solicitar_reembolso_sandbox(transaction_id="tx-prueba", amount_in_cents=1200, reference="ref-prueba", scenario="approved")
+    assert len(calls) == 2
 
 
 def make_event(secret: str, environment: str = "test"):

@@ -129,6 +129,37 @@ def consultar_transaccion(transaction_id: str) -> dict:
     return transaction
 
 
+def solicitar_reembolso_sandbox(*, transaction_id: str, amount_in_cents: int, reference: str, scenario: str) -> dict:
+    """Submit once; an ambiguous result must be reviewed rather than retried."""
+    if os.getenv("ENVIRONMENT", "").strip().lower() != "sandbox":
+        raise HTTPException(status_code=404, detail="Reembolsos de prueba disponibles solo en Sandbox.")
+    environment, private_key, api_base = _private_key()
+    if environment != "sandbox" or api_base != SANDBOX_API_BASE:
+        raise HTTPException(status_code=404, detail="Reembolsos de prueba disponibles solo en Sandbox.")
+    payload = {"transaction_id": transaction_id, "amount_in_cents": amount_in_cents,
+               "reference": reference, "reason": "Prueba controlada CrediFresh", "test_scenario": scenario}
+    request = urllib.request.Request(
+        f"{SANDBOX_API_BASE}/refunds", data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": f"Bearer {private_key}", "Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+        raise HTTPException(status_code=502, detail="No se confirmó la respuesta del reembolso de prueba.") from exc
+    data = body.get("data") if isinstance(body, dict) else None
+    if (not isinstance(data, dict) or data.get("transaction_id") != transaction_id
+            or data.get("reference") != reference or type(data.get("amount_in_cents")) is not int
+            or data.get("amount_in_cents") != amount_in_cents
+            or data.get("status") not in {"APPROVED", "DECLINED", "ERROR", "CANCELLED"}):
+        raise HTTPException(status_code=502, detail="Wompi no devolvió un reembolso verificable.")
+    refund_id = data.get("v2_refund_id") or data.get("id")
+    if refund_id is None or not str(refund_id) or len(str(refund_id)) > 128:
+        raise HTTPException(status_code=502, detail="Wompi no devolvió un identificador de reembolso verificable.")
+    return {"status": data["status"], "refund_id": str(refund_id)}
+
+
 def _property_value(event: dict, property_path: str):
     parts = property_path.split(".")
     value = event.get("data", {})

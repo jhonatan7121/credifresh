@@ -171,10 +171,46 @@ Cuando una transacción previamente registrada cambia de estado en la consulta a
 Wompi, el webhook o la reconciliación dejan una alerta `ALERTA_CAMBIO_ESTADO_WOMPI`
 en la auditoría para revisión manual. No generan automáticamente un reembolso,
 no borran el pago y no cambian el saldo de la cuota: el efecto sobre la cartera
-debe quedar definido y verificado antes de permitir una reversión. Wompi ofrece
-reembolsos Sandbox V2, pero el contrato de consulta de su resultado, la
-identificación del reembolso parcial y la política contable deben confirmarse
-antes de automatizar el flujo. No habilitar dinero real con estas limitaciones.
+debe quedar definido y verificado antes de permitir una reversión.
+
+### Reembolso de prueba
+
+Después de aplicar la migración `e34f8c19b621`, un ADMIN puede consultar con
+`GET /integraciones/wompi/sandbox/creditos/{credito_id}/cuotas/{cuota_id}/reembolso`
+y solicitar una prueba con `POST` a la misma ruta. El cuerpo contiene
+`{"monto_centavos":100000,"escenario":"approved"}`; los escenarios son
+`approved`, `declined`, `error` o `cancelled`. El servidor valida el pago
+original consultando Wompi, guarda una reserva antes de enviar la solicitud V2
+y acepta una sola solicitud por pago, total o parcial. El proveedor usa la llave
+de Sandbox del servicio; la respuesta se comprueba por identificador, referencia
+y monto. Una respuesta incierta queda en revisión y nunca se reenvía
+automáticamente. Consultar la solicitud con GET antes de actuar. La migración
+impide su reversión cuando hay solicitudes registradas.
+
+Esta prueba no modifica el pago ni el saldo de la cuota. El reembolso registrado
+se incluye como diferencia en los cotejos y exige revisión. La respuesta de
+Wompi V2, la consulta posterior ante respuesta perdida, los reembolsos externos,
+reembolsos múltiples y parciales y su efecto contable necesitan validación con
+Wompi y definición operativa antes de usarse con dinero real.
+
+### Cotejo de informe de prueba
+
+`POST /integraciones/wompi/sandbox/conciliacion-informe` permite a un ADMIN
+enviar hasta 20 transacciones sintéticas, el periodo, las referencias del abono
+y los montos del informe Wompi y del abono bancario. Todos los importes van en
+centavos COP enteros. El servidor consulta cada transacción conocida a Wompi,
+contrasta los pagos de cartera, calcula bruto menos comisiones, impuestos,
+reembolsos y otros descuentos, compara neto y referencia con el abono ingresado,
+y conserva una huella y el resultado en auditoría. El ejemplo de entrada se
+expone en Swagger; no ingresar extractos ni identificadores reales en Sandbox.
+
+Los importes y referencias del informe y del banco son suministrados por el
+operador. Una igualdad aritmética no autentica los archivos, confirma la
+integridad del periodo ni demuestra un abono bancario: por diseño el resultado
+sigue en `REQUIERE_REVISION`. Es una preparación para cotejos, no una conexión
+con un banco ni una conciliación completa. Definir reportes reales, formato,
+reglas de agrupación, comisiones, devoluciones, custodia, evidencia y responsables
+antes de producción. No habilitar dinero real con estas limitaciones.
 
 El evento de recaudo requiere la consulta autenticada de la transacción a
 Wompi y confirma identificador, link, estado, moneda y monto. Si la consulta no

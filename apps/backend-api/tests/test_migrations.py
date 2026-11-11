@@ -29,6 +29,7 @@ EXPECTED_TABLES = {
     "usuarios",
     "tasas_credito_mensuales",
     "wompi_pagos",
+    "wompi_reembolsos_sandbox",
     "wompi_desembolsos_sandbox",
 }
 
@@ -72,10 +73,31 @@ class InitialMigrationTests(unittest.TestCase):
                 self.assertEqual(payout_indexes.get("ix_wompi_desembolsos_sandbox_payout_id"), 1)
                 payment_indexes = {row[1]: row[2] for row in connection.execute("PRAGMA index_list('wompi_pagos')")}
                 self.assertEqual(payment_indexes.get("uq_wompi_pago_cuota_abierto"), 1)
+                refund_unique = [row for row in connection.execute("PRAGMA index_list('wompi_reembolsos_sandbox')") if row[2]]
+                self.assertGreaterEqual(len(refund_unique), 2)
             finally:
                 connection.close()
 
         self.assertSetEqual(tables, EXPECTED_TABLES)
+
+    def test_no_pierde_reembolsos_al_revertir_migracion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "refund-migration.sqlite3"
+            environment = os.environ.copy()
+            environment["DATABASE_URL"] = f"sqlite:///{database_path.as_posix()}"
+            command = [sys.executable, "-m", "alembic", "-c", "alembic.ini"]
+            subprocess.run(command + ["upgrade", "head"], cwd=BACKEND_DIRECTORY, env=environment, check=True)
+            with closing(sqlite3.connect(database_path)) as connection:
+                connection.execute("""INSERT INTO wompi_reembolsos_sandbox
+                    (wompi_pago_id, referencia, monto, escenario, estado)
+                    VALUES (1, 'ref-prueba', 100, 'approved', 'INCIERTO')""")
+                connection.commit()
+            result = subprocess.run(command + ["downgrade", "-1"], cwd=BACKEND_DIRECTORY, env=environment,
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("no se puede perder su trazabilidad", result.stderr)
+            with closing(sqlite3.connect(database_path)) as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM wompi_reembolsos_sandbox").fetchone()[0], 1)
 
     def test_migration_rechaza_intentos_abiertos_duplicados(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
