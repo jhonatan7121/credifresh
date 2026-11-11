@@ -129,6 +129,33 @@ def consultar_transaccion(transaction_id: str) -> dict:
     return transaction
 
 
+def consultar_reembolso_sandbox(refund_id: str) -> dict:
+    """Diagnóstico de solo lectura; nunca devuelve credenciales ni cuerpo de error."""
+    if os.getenv("ENVIRONMENT", "").strip().lower() != "sandbox":
+        raise HTTPException(status_code=404, detail="Consulta disponible solo en Sandbox.")
+    environment, private_key, api_base = _private_key()
+    if environment != "sandbox" or api_base != SANDBOX_API_BASE:
+        raise HTTPException(status_code=404, detail="Consulta disponible solo en Sandbox.")
+    if not isinstance(refund_id, str) or not refund_id.isascii() or not refund_id.isdigit() or len(refund_id) > 15:
+        raise HTTPException(status_code=422, detail="Identificador de reembolso inválido.")
+    request = urllib.request.Request(f"{SANDBOX_API_BASE}/refunds/{refund_id}",
+        headers={"Authorization": f"Bearer {private_key}", "Accept": "application/json"}, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return {"respuesta_http_wompi": exc.code, "datos_confirmados": False}
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        return {"respuesta_http_wompi": None, "datos_confirmados": False}
+    data = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(data, dict):
+        return {"respuesta_http_wompi": 200, "datos_confirmados": False}
+    return {"respuesta_http_wompi": 200, "datos_confirmados": str(data.get("id")) == refund_id,
+            "estado": data.get("status") if data.get("status") in ("APPROVED", "DECLINED", "ERROR", "CANCELLED") else None,
+            "monto_centavos": data.get("amount_in_cents") if type(data.get("amount_in_cents")) is int else None,
+            "transaction_id": data.get("transaction_id") if isinstance(data.get("transaction_id"), str) else None}
+
+
 def solicitar_reembolso_sandbox(*, transaction_id: str, amount_in_cents: int, reference: str, scenario: str) -> dict:
     """Submit once; an ambiguous result must be reviewed rather than retried."""
     if os.getenv("ENVIRONMENT", "").strip().lower() != "sandbox":

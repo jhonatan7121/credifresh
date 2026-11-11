@@ -6,6 +6,26 @@ from fastapi import HTTPException
 from app.services.wompi_service import consultar_transaccion, crear_link_pago, solicitar_reembolso_sandbox, validar_firma_evento
 
 
+def test_consulta_reembolso_es_solo_sandbox_y_maneja_404(monkeypatch):
+    from urllib.error import HTTPError
+    from app.services import wompi_service
+    monkeypatch.setenv("ENVIRONMENT", "sandbox")
+    monkeypatch.setenv("WOMPI_ENVIRONMENT", "sandbox")
+    monkeypatch.setenv("WOMPI_PRIVATE_KEY", "prv_test_ficticia")
+    requests = []
+    def not_found(req, timeout):
+        requests.append((req.full_url, req.method))
+        raise HTTPError(req.full_url, 404, "not found", None, None)
+    monkeypatch.setattr(wompi_service.urllib.request, "urlopen", not_found)
+    assert wompi_service.consultar_reembolso_sandbox("32935") == {"respuesta_http_wompi": 404, "datos_confirmados": False}
+    assert requests == [("https://sandbox.wompi.co/v1/refunds/32935", "GET")]
+    with pytest.raises(HTTPException):
+        wompi_service.consultar_reembolso_sandbox("../32935")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    with pytest.raises(HTTPException):
+        wompi_service.consultar_reembolso_sandbox("32935")
+
+
 def test_reembolso_usa_solo_api_sandbox_y_valida_respuesta(monkeypatch):
     import json
     from app.services import wompi_service

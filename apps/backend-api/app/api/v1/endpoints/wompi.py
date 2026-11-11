@@ -19,7 +19,7 @@ from app.models.pago import Pago
 from app.models.usuario import Usuario
 from app.models.wompi_pago import WompiPago
 from app.models.wompi_reembolso import WompiReembolsoSandbox
-from app.services.wompi_service import consultar_transaccion, crear_link_pago, get_wompi_environment, solicitar_reembolso_sandbox, validar_firma_evento, verificar_configuracion_recaudo
+from app.services.wompi_service import consultar_reembolso_sandbox, consultar_transaccion, crear_link_pago, get_wompi_environment, solicitar_reembolso_sandbox, validar_firma_evento, verificar_configuracion_recaudo
 from modules.audit.audit_service import registrar_auditoria
 
 
@@ -60,6 +60,28 @@ def consultar_reembolso_de_prueba(
     if not row:
         raise HTTPException(status_code=404, detail="No hay solicitud de reembolso de prueba para la cuota.")
     return _resumen_reembolso(row)
+
+
+@router.get("/sandbox/creditos/{credito_id}/cuotas/{cuota_id}/reembolso/consulta-proveedor")
+def comprobar_reembolso_proveedor_sandbox(
+    credito_id: int, cuota_id: int, refund_id: str, db: Session = Depends(get_db),
+    current_user: Usuario = Depends(RoleChecker(["ADMIN"]))
+):
+    """Consulta sin cambiar cartera ni confirmar reservas automáticamente."""
+    _exigir_sandbox_recaudo()
+    row = (db.query(WompiReembolsoSandbox).join(WompiPago)
+           .filter(WompiPago.credito_id == credito_id, WompiPago.cuota_id == cuota_id)
+           .order_by(WompiReembolsoSandbox.id.desc()).first())
+    if not row:
+        raise HTTPException(status_code=404, detail="No hay reembolso local para esta cuota.")
+    attempt = db.get(WompiPago, row.wompi_pago_id)
+    result = consultar_reembolso_sandbox(refund_id)
+    confirmed = result.get("datos_confirmados") is True
+    return {"respuesta_http_wompi": result.get("respuesta_http_wompi"), "identificador_confirmado": confirmed,
+            "estado_wompi": result.get("estado") if confirmed else None,
+            "monto_coincide": (result.get("monto_centavos") == int(Decimal(str(row.monto)) * 100)) if confirmed else None,
+            "transaccion_coincide": (bool(attempt.wompi_transaction_id) and result.get("transaction_id") == attempt.wompi_transaction_id) if confirmed else None,
+            "estado_local": row.estado, "cartera_modificada": False, "requiere_revision": True}
 
 
 @router.post("/sandbox/creditos/{credito_id}/cuotas/{cuota_id}/reembolso")

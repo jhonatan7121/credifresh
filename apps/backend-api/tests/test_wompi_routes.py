@@ -512,6 +512,13 @@ def test_reembolso_incierto_no_se_reenvia(monkeypatch):
         assert wompi_endpoint.crear_reembolso_de_prueba(quota.credito_id, quota.id, data, db, admin)["estado"] == "INCIERTO"
         assert wompi_endpoint.crear_reembolso_de_prueba(quota.credito_id, quota.id, data, db, admin)["ya_existia"]
         assert len(calls) == 1 and quota.monto_pagado == Decimal("1250.00")
+        monkeypatch.setattr(wompi_endpoint, "consultar_reembolso_sandbox", lambda _id: {
+            "respuesta_http_wompi": 200, "datos_confirmados": True, "estado": "APPROVED",
+            "monto_centavos": 125000, "transaction_id": "route-tx-001"})
+        check = wompi_endpoint.comprobar_reembolso_proveedor_sandbox(quota.credito_id, quota.id, "32935", db, admin)
+        assert check["transaccion_coincide"] and check["monto_coincide"]
+        assert check["estado_local"] == "INCIERTO" and check["requiere_revision"] and not check["cartera_modificada"]
+        assert db.query(Pago).count() == 1 and len(calls) == 1
     finally:
         db.close()
 
@@ -593,6 +600,8 @@ def test_reembolso_exige_admin_ambiente_y_monto_valido(client, monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "sandbox")
     app.dependency_overrides[get_current_active_user] = lambda: SimpleNamespace(id=42, rol="CLIENTE", activo=True)
     response = client.post("/integraciones/wompi/sandbox/creditos/1/cuotas/1/reembolso", json={"monto_centavos": 1, "escenario": "approved"})
+    assert response.status_code == 403
+    response = client.get("/integraciones/wompi/sandbox/creditos/1/cuotas/1/reembolso/consulta-proveedor?refund_id=32935")
     assert response.status_code == 403
     with pytest.raises(ValueError):
         wompi_endpoint.ReembolsoSandboxInput(monto_centavos=1.1, escenario="approved")
