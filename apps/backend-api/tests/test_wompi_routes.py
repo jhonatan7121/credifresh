@@ -519,6 +519,32 @@ def test_reembolso_incierto_no_se_reenvia(monkeypatch):
         assert check["transaccion_coincide"] and check["monto_coincide"]
         assert check["estado_local"] == "INCIERTO" and check["requiere_revision"] and not check["cartera_modificada"]
         assert db.query(Pago).count() == 1 and len(calls) == 1
+        verified = {"respuesta_http_wompi": 200, "datos_confirmados": True, "estado": "APPROVED",
+                    "monto_centavos": 125000, "transaction_id": "route-tx-001"}
+        for key, invalid in [("respuesta_http_wompi", 404), ("datos_confirmados", False),
+                             ("estado", "DECLINED"), ("monto_centavos", 125001),
+                             ("transaction_id", "otra-transaccion")]:
+            monkeypatch.setattr(wompi_endpoint, "consultar_reembolso_sandbox", lambda _id, k=key, v=invalid: {**verified, k: v})
+            with pytest.raises(HTTPException) as exc:
+                wompi_endpoint.reconciliar_reembolso_sandbox(quota.credito_id, quota.id,
+                    wompi_endpoint.ReconciliarReembolsoSandboxInput(refund_id="32935"), db, admin)
+            assert exc.value.status_code == 409
+            assert db.query(WompiReembolsoSandbox).one().estado == "INCIERTO"
+        monkeypatch.setattr(wompi_endpoint, "consultar_reembolso_sandbox", lambda _id: verified)
+        reconciled = wompi_endpoint.reconciliar_reembolso_sandbox(quota.credito_id, quota.id,
+            wompi_endpoint.ReconciliarReembolsoSandboxInput(refund_id="32935"), db, admin)
+        assert reconciled["estado"] == "CONFIRMADO" and reconciled["wompi_reembolso_id"] == "32935"
+        assert not reconciled["ya_reconciliado"] and not reconciled["saldo_cartera_modificado"]
+        monkeypatch.setattr(wompi_endpoint, "consultar_reembolso_sandbox", lambda _id: pytest.fail("no consultar dos veces"))
+        repeated = wompi_endpoint.reconciliar_reembolso_sandbox(quota.credito_id, quota.id,
+            wompi_endpoint.ReconciliarReembolsoSandboxInput(refund_id="32935"), db, admin)
+        assert repeated["ya_reconciliado"] and len(calls) == 1
+        assert db.query(AuditLog).filter_by(accion="RECONCILIAR_REEMBOLSO_WOMPI_SANDBOX").count() == 1
+        assert db.query(Pago).count() == 1 and quota.monto_pagado == Decimal("1250.00")
+        with pytest.raises(HTTPException) as exc:
+            wompi_endpoint.reconciliar_reembolso_sandbox(quota.credito_id, quota.id,
+                wompi_endpoint.ReconciliarReembolsoSandboxInput(refund_id="32936"), db, admin)
+        assert exc.value.status_code == 409
     finally:
         db.close()
 
@@ -602,6 +628,8 @@ def test_reembolso_exige_admin_ambiente_y_monto_valido(client, monkeypatch):
     response = client.post("/integraciones/wompi/sandbox/creditos/1/cuotas/1/reembolso", json={"monto_centavos": 1, "escenario": "approved"})
     assert response.status_code == 403
     response = client.get("/integraciones/wompi/sandbox/creditos/1/cuotas/1/reembolso/consulta-proveedor?refund_id=32935")
+    assert response.status_code == 403
+    response = client.post("/integraciones/wompi/sandbox/creditos/1/cuotas/1/reembolso/reconciliar", json={"refund_id": "32935"})
     assert response.status_code == 403
     with pytest.raises(ValueError):
         wompi_endpoint.ReembolsoSandboxInput(monto_centavos=1.1, escenario="approved")

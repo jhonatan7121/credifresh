@@ -187,10 +187,20 @@ y monto. Una respuesta incierta queda en revisión y nunca se reenvía
 automáticamente. Consultar la solicitud con GET antes de actuar. La migración
 impide su reversión cuando hay solicitudes registradas.
 
+Para una respuesta incierta, un ADMIN puede verificar un ID de reembolso de
+prueba con `GET` a la ruta anterior seguida de `/consulta-proveedor`, usando
+`refund_id` como parámetro. Para reconciliar una reserva `INCIERTO`, puede
+enviar `POST` a la ruta seguida de `/reconciliar` con `{"refund_id":"32935"}`
+(sustituir por el ID de prueba observado). La API consulta a Wompi Sandbox y
+solo confirma cuando coinciden el identificador, la transacción, el importe y
+el estado aprobado. Repetir la reconciliación con el mismo ID es idempotente y
+no vuelve a consultar ni a enviar un reembolso. Un fallo o diferencia deja el
+registro sin confirmar; cualquier otro estado requiere revisión manual. El
+cambio y la auditoría se guardan en la misma transacción de base de datos.
+
 Esta prueba no modifica el pago ni el saldo de la cuota. El reembolso registrado
 se incluye como diferencia en los cotejos y exige revisión. La respuesta de
-Wompi V2, la consulta posterior ante respuesta perdida, los reembolsos externos,
-reembolsos múltiples y parciales y su efecto contable necesitan validación con
+Wompi V2, los reembolsos externos, reembolsos múltiples y parciales y su efecto contable necesitan validación con
 Wompi y definición operativa antes de usarse con dinero real.
 
 ### Cotejo de informe de prueba

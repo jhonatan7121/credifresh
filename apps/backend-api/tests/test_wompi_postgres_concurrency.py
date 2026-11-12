@@ -349,3 +349,61 @@ def test_dos_reembolsos_simultaneos_solo_envian_uno(monkeypatch):
         assert len(calls) == 1
     finally:
         engine.dispose()
+
+
+@pytest.mark.skipif(not os.getenv("POSTGRES_TEST_DATABASE_URL"), reason="Requiere PostgreSQL local aislado")
+def test_reconciliacion_reembolso_concurrente_registra_una_auditoria(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "sandbox")
+    monkeypatch.setenv("WOMPI_ENVIRONMENT", "sandbox")
+    engine = isolated_engine()
+    Session = sessionmaker(bind=engine, autoflush=False)
+    unique = uuid4().hex
+    transaction_id = f"tx-{unique}"
+    try:
+        with Session() as db:
+            admin = Usuario(email=f"reconcile-{unique}@example.invalid", password_hash="x", rol="ADMIN", activo=True)
+            db.add(admin); db.flush()
+            person = Cliente(nombre="Prueba", cedula=unique[:12], telefono="3000000000", usuario_id=admin.id)
+            db.add(person); db.flush()
+            credit = Credito(cliente_id=person.id, monto=Decimal("1250"), plazo_meses=1, tasa_interes=Decimal("0"), estado="DESEMBOLSADO")
+            db.add(credit); db.flush()
+            quota = CuotaAmortizacion(credito_id=credit.id, numero_cuota=1, fecha_vencimiento=datetime.datetime(2026, 12, 1),
+                monto_cuota=Decimal("1250"), capital=Decimal("1250"), interes=Decimal("0"), saldo_remanente=Decimal("0"),
+                monto_pagado=Decimal("1250"), estado="PAGADA")
+            db.add(quota); db.flush()
+            payment = WompiPago(credito_id=credit.id, cuota_id=quota.id, referencia=unique,
+                wompi_link_id=f"link-{unique}", wompi_transaction_id=transaction_id,
+                monto_esperado=Decimal("1250"), estado="PAGADO", checkout_url=f"https://example.invalid/{unique}")
+            db.add(payment); db.flush()
+            db.add(WompiReembolsoSandbox(wompi_pago_id=payment.id, referencia=uuid4().hex,
+                monto=Decimal("100"), escenario="approved", estado="INCIERTO"))
+            db.add(Pago(credito_id=credit.id, cuota_id=quota.id, monto_pagado=Decimal("1250"), metodo_pago="WOMPI_SANDBOX"))
+            db.commit()
+            credit_id, quota_id, admin_id, payment_id = credit.id, quota.id, admin.id, payment.id
+        started, release = threading.Event(), threading.Event()
+        calls = []
+        def provider(_id):
+            calls.append(1); started.set()
+            assert release.wait(10)
+            return {"respuesta_http_wompi": 200, "datos_confirmados": True, "estado": "APPROVED",
+                    "monto_centavos": 10000, "transaction_id": transaction_id}
+        monkeypatch.setattr(endpoint, "consultar_reembolso_sandbox", provider)
+        def reconcile():
+            with Session() as session:
+                return endpoint.reconciliar_reembolso_sandbox(credit_id, quota_id,
+                    endpoint.ReconciliarReembolsoSandboxInput(refund_id="32935"), session, session.get(Usuario, admin_id))
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(reconcile)
+            assert started.wait(10)
+            second = pool.submit(reconcile)
+            release.set()
+            results = [first.result(timeout=10), second.result(timeout=10)]
+        assert sorted(item["ya_reconciliado"] for item in results) == [False, True]
+        assert len(calls) == 1
+        with Session() as db:
+            assert db.query(WompiReembolsoSandbox).filter_by(wompi_pago_id=payment_id).one().estado == "CONFIRMADO"
+            assert db.query(AuditLog).filter_by(accion="RECONCILIAR_REEMBOLSO_WOMPI_SANDBOX", entidad_id=credit_id).count() == 1
+            assert db.get(CuotaAmortizacion, quota_id).monto_pagado == Decimal("1250")
+            assert db.query(Pago).filter_by(credito_id=credit_id, cuota_id=quota_id).count() == 1
+    finally:
+        engine.dispose()

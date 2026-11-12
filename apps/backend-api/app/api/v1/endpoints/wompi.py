@@ -36,6 +36,11 @@ class ReembolsoSandboxInput(BaseModel):
     escenario: Literal["approved", "declined", "error", "cancelled"]
 
 
+class ReconciliarReembolsoSandboxInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    refund_id: str = Field(min_length=1, max_length=15, pattern=r"^[0-9]+$")
+
+
 def _exigir_sandbox_recaudo():
     if os.getenv("ENVIRONMENT", "").strip().lower() != "sandbox" or get_wompi_environment() != "sandbox":
         raise HTTPException(status_code=404, detail="Reconciliación disponible únicamente en Sandbox.")
@@ -82,6 +87,44 @@ def comprobar_reembolso_proveedor_sandbox(
             "monto_coincide": (result.get("monto_centavos") == int(Decimal(str(row.monto)) * 100)) if confirmed else None,
             "transaccion_coincide": (bool(attempt.wompi_transaction_id) and result.get("transaction_id") == attempt.wompi_transaction_id) if confirmed else None,
             "estado_local": row.estado, "cartera_modificada": False, "requiere_revision": True}
+
+
+@router.post("/sandbox/creditos/{credito_id}/cuotas/{cuota_id}/reembolso/reconciliar")
+def reconciliar_reembolso_sandbox(
+    credito_id: int, cuota_id: int, datos: ReconciliarReembolsoSandboxInput,
+    db: Session = Depends(get_db), current_user: Usuario = Depends(RoleChecker(["ADMIN"]))
+):
+    """Confirma una reserva incierta solo después de consultar a Wompi; no modifica la cartera."""
+    _exigir_sandbox_recaudo()
+    # The creation flow also locks the payment first; retain the same lock order.
+    attempt = (db.query(WompiPago).filter_by(credito_id=credito_id, cuota_id=cuota_id, estado="PAGADO")
+               .order_by(WompiPago.id.desc()).with_for_update().first())
+    if not attempt or not attempt.wompi_transaction_id:
+        raise HTTPException(status_code=409, detail="No hay pago confirmado para verificar el reembolso.")
+    refund = db.query(WompiReembolsoSandbox).filter_by(wompi_pago_id=attempt.id).with_for_update().first()
+    if not refund:
+        raise HTTPException(status_code=404, detail="No hay solicitud local de reembolso para este pago.")
+    if refund.estado == "CONFIRMADO" and refund.wompi_reembolso_id == datos.refund_id:
+        return {**_resumen_reembolso(refund), "ya_reconciliado": True}
+    if refund.estado != "INCIERTO" or refund.wompi_reembolso_id not in (None, datos.refund_id):
+        raise HTTPException(status_code=409, detail="El estado o identificador requieren revisión manual.")
+    result = consultar_reembolso_sandbox(datos.refund_id)
+    expected_cents = int((Decimal(str(refund.monto)) * 100).quantize(Decimal("1")))
+    if (result.get("respuesta_http_wompi") != 200 or result.get("datos_confirmados") is not True
+            or result.get("estado") != "APPROVED" or type(result.get("monto_centavos")) is not int
+            or result.get("monto_centavos") != expected_cents
+            or result.get("transaction_id") != attempt.wompi_transaction_id):
+        raise HTTPException(status_code=409, detail="Wompi no confirmó los datos; la reserva continúa en revisión.")
+    refund.estado = "CONFIRMADO"
+    refund.estado_proveedor = "APPROVED"
+    refund.wompi_reembolso_id = datos.refund_id
+    registrar_auditoria(db=db, usuario=current_user, accion="RECONCILIAR_REEMBOLSO_WOMPI_SANDBOX",
+        entidad="credito", entidad_id=credito_id, resultado="REQUIERE_REVISION",
+        detalles={"cuota_id": cuota_id, "reembolso_id": refund.id, "wompi_reembolso_id": datos.refund_id,
+                  "estado_wompi": "APPROVED", "monto_centavos": expected_cents,
+                  "cartera_modificada": False})
+    db.commit()
+    return {**_resumen_reembolso(refund), "ya_reconciliado": False}
 
 
 @router.post("/sandbox/creditos/{credito_id}/cuotas/{cuota_id}/reembolso")
