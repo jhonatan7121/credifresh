@@ -30,11 +30,35 @@ EXPECTED_TABLES = {
     "tasas_credito_mensuales",
     "wompi_pagos",
     "wompi_reembolsos_sandbox",
+    "solicitudes_reembolso_sandbox",
     "wompi_desembolsos_sandbox",
 }
 
 
 class InitialMigrationTests(unittest.TestCase):
+    def test_no_pierde_solicitudes_al_revertir_nueva_migracion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "refund-policy.sqlite3"
+            environment = os.environ.copy()
+            environment["DATABASE_URL"] = f"sqlite:///{path.as_posix()}"
+            command = [sys.executable, "-m", "alembic", "-c", "alembic.ini"]
+            subprocess.run(command + ["upgrade", "head"], cwd=BACKEND_DIRECTORY, env=environment, check=True)
+            with closing(sqlite3.connect(path)) as connection:
+                connection.execute("""INSERT INTO solicitudes_reembolso_sandbox
+                    (wompi_pago_id, pago_id, credito_id, cuota_id, transaccion_id, monto_centavos,
+                     motivo, descripcion, clasificacion, evidencia, solicitante_id, autorizacion,
+                     ejecucion, verificacion, conciliacion, revision_contable)
+                    VALUES (1, 1, 1, 1, 'tx', 100, 'OTRO', 'descripción sintética',
+                            'OTRO_TRATAMIENTO_PENDIENTE', 'prueba', 1, 'PENDIENTE',
+                            'NO_ENVIADO', 'PENDIENTE', 'PENDIENTE', 'PENDIENTE')""")
+                connection.commit()
+            result = subprocess.run(command + ["downgrade", "-1"], cwd=BACKEND_DIRECTORY,
+                                    env=environment, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("No se puede borrar la trazabilidad", result.stderr)
+            with closing(sqlite3.connect(path)) as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM solicitudes_reembolso_sandbox").fetchone()[0], 1)
+
     def test_upgrade_head_creates_the_expected_schema(self) -> None:
         """A fresh database can be upgraded without accessing application data."""
         with tempfile.TemporaryDirectory() as directory:
@@ -86,7 +110,7 @@ class InitialMigrationTests(unittest.TestCase):
             environment = os.environ.copy()
             environment["DATABASE_URL"] = f"sqlite:///{database_path.as_posix()}"
             command = [sys.executable, "-m", "alembic", "-c", "alembic.ini"]
-            subprocess.run(command + ["upgrade", "head"], cwd=BACKEND_DIRECTORY, env=environment, check=True)
+            subprocess.run(command + ["upgrade", "e34f8c19b621"], cwd=BACKEND_DIRECTORY, env=environment, check=True)
             with closing(sqlite3.connect(database_path)) as connection:
                 connection.execute("""INSERT INTO wompi_reembolsos_sandbox
                     (wompi_pago_id, referencia, monto, escenario, estado)

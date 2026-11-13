@@ -15,6 +15,7 @@ from app.api.v1.endpoints.usuarios import router as usuarios_router
 from app.api.v1.endpoints.wompi import router as wompi_router
 from app.api.v1.endpoints.wompi_payouts import router as wompi_payouts_router
 from app.api.v1.endpoints.conciliacion_sandbox import router as conciliacion_sandbox_router
+from app.api.v1.endpoints.politica_reembolsos_sandbox import router as politica_reembolsos_router
 
 from app.api.v1.endpoints.simulador import router as simulador_router
 
@@ -78,6 +79,7 @@ app.include_router(usuarios_router)
 app.include_router(wompi_router)
 app.include_router(wompi_payouts_router)
 app.include_router(conciliacion_sandbox_router)
+app.include_router(politica_reembolsos_router)
 
 @app.get("/")
 def home():

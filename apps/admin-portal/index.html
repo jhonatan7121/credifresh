@@ -46,6 +46,7 @@
           <a class="nav-link" href="#clientes" data-section-link="clientes"><span aria-hidden="true">♙</span>Clientes</a>
           <a class="nav-link" href="#creditos" data-section-link="creditos"><span aria-hidden="true">▤</span>Créditos</a>
           <a class="nav-link" href="#auditoria" data-section-link="auditoria"><span aria-hidden="true">◷</span>Auditoría</a>
+          <a id="refund-nav" class="nav-link" href="#reembolsos" data-section-link="reembolsos" hidden><span aria-hidden="true">↺</span>Reembolsos y conciliación</a>
         </nav>
         <div class="sidebar-bottom">
           <span id="api-status-dot" class="online-dot checking"></span><span id="api-status-label" role="status" aria-live="polite">Comprobando conexión…</span>
@@ -240,6 +241,24 @@
               <div id="credit-amortization-table" class="table-wrap"></div>
             </div>
           </section>
+        </section>
+        <section id="section-reembolsos" class="page-section" hidden aria-labelledby="refund-title">
+          <div class="section-heading"><div><p class="eyebrow">PRUEBA AISLADA</p><h2 id="refund-title">Reembolsos y conciliación</h2></div></div>
+          <section class="content-card">
+            <p><strong>AMBIENTE SANDBOX — NO UTILIZA DINERO REAL</strong></p>
+            <p><strong>LOS REEMBOLSOS NO MODIFICAN AUTOMÁTICAMENTE LA CARTERA</strong></p>
+            <p>La ejecución y la conciliación están bloqueadas hasta resolver la incompatibilidad del endpoint anterior. Este panel no acredita conciliación bancaria.</p>
+            <form id="refund-request-form">
+              <label>ID de pago Wompi <input id="refund-payment-id" type="number" min="1" required></label>
+              <label>Importe en centavos COP <input id="refund-amount" type="number" min="1" step="1" required></label>
+              <label>Motivo <select id="refund-reason" required><option value="">Selecciona</option><option>PAGO_DUPLICADO</option><option>PAGO_EN_EXCESO</option><option>INTERESES_INDEBIDOS</option><option>REVERSO_PAGO</option><option>ERROR_OPERATIVO</option><option>OTRO</option></select></label>
+              <label>Descripción <input id="refund-description" minlength="10" maxlength="2000" required></label>
+              <label>Clasificación preliminar <select id="refund-classification" required><option value="">Selecciona</option><option>PASIVO_SALDO_A_FAVOR</option><option>AJUSTE_INTERESES</option><option>REVERSO_CAPITAL_POR_REVISAR</option><option>OTRO_TRATAMIENTO_PENDIENTE</option></select></label>
+              <label>Referencia de soporte <input id="refund-evidence" minlength="3" maxlength="250" required></label>
+              <button class="button button-primary" type="submit">Registrar solicitud para revisión</button>
+            </form><p id="refund-message" class="message" role="status"></p>
+          </section>
+          <section class="content-card"><div class="card-heading"><h3>Solicitudes de prueba</h3><button id="refund-refresh" class="button button-secondary" type="button">Actualizar</button></div><div id="refund-list"></div></section>
         </section>
         <section id="section-auditoria" class="page-section" hidden aria-labelledby="audit-title">
           <div class="section-heading"><div><p class="eyebrow">TRAZABILIDAD</p><h2 id="audit-title">Auditoría administrativa</h2></div><button id="audit-refresh-button" class="button button-secondary" type="button">Actualizar eventos</button></div>

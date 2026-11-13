@@ -1469,7 +1469,7 @@
       if (link.dataset.sectionLink === name) link.setAttribute("aria-current", "page");
       else link.removeAttribute("aria-current");
     });
-    const titles = { inicio: "Resumen", usuarios: "Usuarios", clientes: "Clientes", creditos: "Créditos", auditoria: "Auditoría" };
+    const titles = { inicio: "Resumen", usuarios: "Usuarios", clientes: "Clientes", creditos: "Créditos", auditoria: "Auditoría", reembolsos: "Reembolsos y conciliación" };
     $("page-title").textContent = titles[name] || titles.inicio;
   }
 
@@ -1477,6 +1477,7 @@
     accessToken = null;
     activeEmail = "";
     appView.hidden = true;
+    $("refund-nav").hidden = true;
     clientView.hidden = true;
     loginView.hidden = false;
     loginForm.reset();
@@ -1528,6 +1529,7 @@
       appView.hidden = false;
       showSection("inicio");
       await loadDashboard();
+      await loadRefunds();
     } catch (error) {
       accessToken = null;
       activeEmail = "";
@@ -1546,7 +1548,58 @@
       showSection(link.dataset.sectionLink);
       if (link.dataset.sectionLink === "auditoria") loadAudit();
       if (link.dataset.sectionLink === "creditos") loadMonthlyRate();
+      if (link.dataset.sectionLink === "reembolsos") loadRefunds();
     });
+  });
+  const refundApi = "/integraciones/wompi/sandbox/solicitudes-reembolso";
+  async function loadRefunds() {
+    try {
+      const records = await api(refundApi);
+      $("refund-nav").hidden = false;
+      const rows = records.map((r) => {
+        const tr = document.createElement("tr");
+        [r.id, r.credito_id, r.pago_id, r.monto_centavos, r.motivo, r.clasificacion, r.autorizacion, r.ejecucion].forEach((v) => tr.append(cell(v)));
+        const actionCell = document.createElement("td");
+        if (r.autorizacion === "PENDIENTE") {
+          ["APROBADA", "RECHAZADA"].forEach((decision) => {
+            const button = document.createElement("button");
+            button.type = "button"; button.className = "button button-secondary";
+            button.textContent = decision === "APROBADA" ? "Aprobar" : "Rechazar";
+            button.addEventListener("click", async () => {
+              const justification = window.prompt("Indica la justificación de esta decisión (mínimo 10 caracteres):");
+              if (justification === null) return;
+              button.disabled = true;
+              try {
+                await api(`${refundApi}/${r.id}/decision`, { method: "POST", body: JSON.stringify({decision, justificacion: justification}) });
+                await loadRefunds();
+                setMessage($("refund-message"), "Decisión registrada. No se ha enviado ningún reembolso.", "success");
+              } catch (error) { setMessage($("refund-message"), error.message || "No se pudo registrar la decisión."); }
+              finally { button.disabled = false; }
+            });
+            actionCell.append(button);
+          });
+        }
+        tr.append(actionCell); return tr;
+      });
+      $("refund-list").replaceChildren(table(["ID", "Crédito", "Pago", "Centavos", "Motivo", "Clasificación", "Autorización", "Envío", "Acciones"], rows, "No hay solicitudes de prueba."));
+    } catch (error) {
+      $("refund-nav").hidden = true;
+      if (error.status !== 404) setMessage($("refund-message"), error.message || "No se pudieron consultar las solicitudes.");
+    }
+  }
+  $("refund-refresh").addEventListener("click", loadRefunds);
+  $("refund-request-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submit = event.currentTarget.querySelector("button[type=submit]"); submit.disabled = true;
+    try {
+      const data = { wompi_pago_id: Number($("refund-payment-id").value), monto_centavos: Number($("refund-amount").value),
+        motivo: $("refund-reason").value, descripcion: $("refund-description").value.trim(),
+        clasificacion: $("refund-classification").value, evidencia: $("refund-evidence").value.trim() };
+      await api(refundApi, { method: "POST", body: JSON.stringify(data) });
+      event.currentTarget.reset(); await loadRefunds();
+      setMessage($("refund-message"), "Solicitud registrada y pendiente de aprobación. No se envió a Wompi.", "success");
+    } catch (error) { setMessage($("refund-message"), error.message || "No se pudo registrar la solicitud."); }
+    finally { submit.disabled = false; }
   });
   async function loadMonthlyRate() {
     try {
