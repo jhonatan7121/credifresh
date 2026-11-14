@@ -36,7 +36,11 @@ services:
       - key: WOMPI_PAYOUT_EVENTS_SECRET
         sync: false
       - key: WOMPI_SANDBOX_SEED_DATA
-        value: "true"
+        value: "false"
+      - key: WOMPI_SANDBOX_SEED_NEW_DISPOSABLE
+        value: "false"
+      - key: WOMPI_SANDBOX_REFUND_POLICY_ENABLED
+        value: "false"
       - key: WOMPI_SANDBOX_TEST_PASSWORD
         sync: false
       - key: ADMIN_BOOTSTRAP_TOKEN
