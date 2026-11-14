@@ -1633,13 +1633,14 @@
   $("refund-refresh").addEventListener("click", loadRefunds);
   $("refund-request-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const submit = event.currentTarget.querySelector("button[type=submit]"); submit.disabled = true;
+    const form = event.currentTarget;
+    const submit = form.querySelector("button[type=submit]"); submit.disabled = true;
     try {
       const data = { wompi_pago_id: Number($("refund-payment-id").value), monto_centavos: Number($("refund-amount").value),
         motivo: $("refund-reason").value, descripcion: $("refund-description").value.trim(),
         clasificacion: $("refund-classification").value, evidencia: $("refund-evidence").value.trim() };
       await api(refundApi, { method: "POST", body: JSON.stringify(data) });
-      event.currentTarget.reset(); await loadRefunds();
+      form.reset(); await loadRefunds();
       setMessage($("refund-message"), "Solicitud registrada y pendiente de aprobación. No se envió a Wompi.", "success");
     } catch (error) { setMessage($("refund-message"), error.message || "No se pudo registrar la solicitud."); }
     finally { submit.disabled = false; }
