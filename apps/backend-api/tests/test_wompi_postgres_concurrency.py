@@ -292,6 +292,9 @@ def test_cambio_de_estado_concurrente_registra_una_sola_alerta():
 def test_dos_reembolsos_simultaneos_solo_envian_uno(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "sandbox")
     monkeypatch.setenv("WOMPI_ENVIRONMENT", "sandbox")
+    monkeypatch.setenv("WOMPI_SANDBOX_REFUND_POLICY_ENABLED", "true")
+    monkeypatch.setenv("WOMPI_PRIVATE_KEY", "prv_test_local_ficticia")
+    from app.api.v1.endpoints import politica_reembolsos_sandbox as policy
     engine = isolated_engine()
     Session = sessionmaker(bind=engine, autoflush=False)
     unique = uuid4().hex
@@ -320,7 +323,10 @@ def test_dos_reembolsos_simultaneos_solo_envian_uno(monkeypatch):
             db.add(Pago(credito_id=credit.id, cuota_id=quota.id, monto_pagado=Decimal("1250"), metodo_pago="WOMPI_SANDBOX"))
             db.commit()
             credit_id, quota_id, admin_id, attempt_id = credit.id, quota.id, admin.id, attempt.id
-        monkeypatch.setattr(endpoint, "consultar_transaccion", lambda _id: transaction)
+        monkeypatch.setattr(policy, "consultar_transaccion", lambda _id: transaction)
+        with Session() as db:
+            solicitud = policy.crear(policy.NuevaSolicitud(wompi_pago_id=attempt_id, monto_centavos=10000, motivo="PAGO_EN_EXCESO", descripcion="Motivo sintético de prueba", clasificacion="PASIVO_SALDO_A_FAVOR", evidencia="Soporte sintético"), db, db.get(Usuario, admin_id))
+            policy.decidir(solicitud["id"], policy.Decision(decision="APROBADA", justificacion="Validación sintética"), db, db.get(Usuario, admin_id))
         started, release = threading.Event(), threading.Event()
         calls = []
         def provider(**kwargs):
@@ -328,7 +334,7 @@ def test_dos_reembolsos_simultaneos_solo_envian_uno(monkeypatch):
             started.set()
             assert release.wait(10)
             return {"status": "APPROVED", "refund_id": "sandbox-refund"}
-        monkeypatch.setattr(endpoint, "solicitar_reembolso_sandbox", provider)
+        monkeypatch.setattr(policy, "solicitar_reembolso_sandbox", provider)
         def request_refund():
             with Session() as session:
                 return endpoint.crear_reembolso_de_prueba(credit_id, quota_id,
@@ -339,10 +345,12 @@ def test_dos_reembolsos_simultaneos_solo_envian_uno(monkeypatch):
             assert started.wait(10)
             second = pool.submit(request_refund)
             try:
-                assert second.result(timeout=10)["ya_existia"] is True
+                with pytest.raises(HTTPException) as exc:
+                    second.result(timeout=10)
+                assert exc.value.status_code == 409
             finally:
                 release.set()
-            assert first.result(timeout=10)["estado"] == "CONFIRMADO"
+            assert first.result(timeout=10)["ejecucion"] == "CONFIRMADO"
         with Session() as db:
             assert db.query(WompiReembolsoSandbox).filter_by(wompi_pago_id=attempt_id).count() == 1
             assert db.get(CuotaAmortizacion, quota_id).monto_pagado == Decimal("1250")

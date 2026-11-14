@@ -51,6 +51,8 @@ def nueva(**kwargs):
 
 def test_aprobacion_separada_no_envia_ni_altera_cartera(monkeypatch):
     db, admin = crear_pago(monkeypatch)
+    enviados = []
+    monkeypatch.setattr(policy, "solicitar_reembolso_sandbox", lambda **kw: (enviados.append(kw) or {"status": "APPROVED", "refund_id": "ficticio"}))
     try:
         quota = db.query(CuotaAmortizacion).one()
         original = (quota.estado, quota.monto_pagado, quota.saldo_remanente, db.query(Pago).count())
@@ -58,13 +60,15 @@ def test_aprobacion_separada_no_envia_ni_altera_cartera(monkeypatch):
         assert result["autorizacion"] == "PENDIENTE" and not result["cartera_modificada"]
         decided = policy.decidir(result["id"], policy.Decision(decision="APROBADA", justificacion="Validación de prueba"), db, admin)
         assert decided["ejecucion"] == "NO_ENVIADO"
+        assert not enviados
+        assert policy.ejecutar(result["id"], db, admin)["ejecucion"] == "CONFIRMADO"
         with pytest.raises(HTTPException) as exc:
             policy.ejecutar(result["id"], db, admin)
         assert exc.value.status_code == 409
         db.refresh(quota)
         assert (quota.estado, quota.monto_pagado, quota.saldo_remanente, db.query(Pago).count()) == original
-        assert db.query(WompiReembolsoSandbox).count() == 0
-        assert db.query(AuditLog).filter_by(entidad="solicitud_reembolso_sandbox").count() == 2
+        assert db.query(WompiReembolsoSandbox).count() == 1 and len(enviados) == 1
+        assert db.query(AuditLog).filter_by(entidad="solicitud_reembolso_sandbox").count() == 4
     finally:
         db.close()
 
@@ -132,3 +136,190 @@ def test_roles_en_backend(client, monkeypatch):
     assert client.get("/integraciones/wompi/sandbox/solicitudes-reembolso").status_code == 403
     app.dependency_overrides[get_current_active_user] = lambda: SimpleNamespace(id=1, rol="GESTOR", activo=True)
     assert client.get("/integraciones/wompi/sandbox/solicitudes-reembolso").status_code == 403
+
+
+def test_ruta_anterior_bloqueada_sin_llamada_a_wompi(monkeypatch):
+    from app.api.v1.endpoints import wompi
+    monkeypatch.setattr(wompi, "solicitar_reembolso_sandbox", lambda **_: pytest.fail("No debe enviarse"))
+    db, admin = crear_pago(monkeypatch)
+    try:
+        with pytest.raises(HTTPException) as exc:
+            wompi.crear_reembolso_de_prueba(1, 1, wompi.ReembolsoSandboxInput(monto_centavos=100, escenario="approved"), db, admin)
+        assert exc.value.status_code == 409
+    finally:
+        db.close()
+
+
+def test_timeout_reservado_sin_reenvio(monkeypatch):
+    db, admin = crear_pago(monkeypatch)
+    calls = []
+    def timeout(**kwargs):
+        calls.append(kwargs)
+        raise TimeoutError()
+    monkeypatch.setattr(policy, "solicitar_reembolso_sandbox", timeout)
+    try:
+        request = policy.crear(nueva(wompi_pago_id=db.query(WompiPago).one().id), db, admin)
+        policy.decidir(request["id"], policy.Decision(decision="APROBADA", justificacion="Revisión de prueba"), db, admin)
+        assert policy.ejecutar(request["id"], db, admin)["ejecucion"] == "INCIERTO"
+        with pytest.raises(HTTPException):
+            policy.ejecutar(request["id"], db, admin)
+        assert len(calls) == 1
+        assert db.query(CuotaAmortizacion).one().monto_pagado == Decimal("1250.00")
+    finally:
+        db.close()
+
+
+def test_ambas_rutas_exigen_aprobacion_y_flag(monkeypatch):
+    from app.api.v1.endpoints import wompi
+    db, admin = crear_pago(monkeypatch)
+    llamadas = []
+    monkeypatch.setattr(policy, "solicitar_reembolso_sandbox", lambda **kw: llamadas.append(kw))
+    try:
+        row = policy.crear(nueva(wompi_pago_id=db.query(WompiPago).one().id), db, admin)
+        legacy = wompi.ReembolsoSandboxInput(monto_centavos=10000, escenario="approved")
+        for fn in (lambda: policy.ejecutar(row["id"], db, admin),
+                   lambda: wompi.crear_reembolso_de_prueba(row["credito_id"], row["cuota_id"], legacy, db, admin)):
+            with pytest.raises(HTTPException):
+                fn()
+        policy.decidir(row["id"], policy.Decision(decision="APROBADA", justificacion="Aprobación sintética"), db, admin)
+        monkeypatch.delenv("WOMPI_SANDBOX_REFUND_POLICY_ENABLED")
+        for fn in (lambda: policy.ejecutar(row["id"], db, admin),
+                   lambda: wompi.crear_reembolso_de_prueba(row["credito_id"], row["cuota_id"], legacy, db, admin)):
+            with pytest.raises(HTTPException):
+                fn()
+        assert not llamadas and db.query(WompiReembolsoSandbox).count() == 0
+        assert db.query(CuotaAmortizacion).one().monto_pagado == Decimal("1250.00")
+    finally:
+        db.close()
+
+
+def test_verificacion_y_conciliacion_idempotentes(monkeypatch):
+    db, admin = crear_pago(monkeypatch)
+    monkeypatch.setattr(policy, "solicitar_reembolso_sandbox", lambda **_: {"status": "APPROVED", "refund_id": "12345"})
+    monkeypatch.setattr(policy, "consultar_reembolso_sandbox", lambda _: {"respuesta_http_wompi": 200,
+        "datos_confirmados": True, "transaction_id": "route-tx-001", "monto_centavos": 10000, "estado": "APPROVED"})
+    try:
+        request = policy.crear(nueva(wompi_pago_id=db.query(WompiPago).one().id), db, admin)
+        sid = request["id"]
+        policy.decidir(sid, policy.Decision(decision="APROBADA", justificacion="Aprobación de prueba"), db, admin)
+        policy.ejecutar(sid, db, admin)
+        assert not policy.verificar(sid, policy.ConsultaProveedor(refund_id="12345"), db, admin)["ya_verificado"]
+        assert policy.verificar(sid, policy.ConsultaProveedor(refund_id="12345"), db, admin)["ya_verificado"]
+        data = policy.RevisionContable(resultado="APROBADA", observacion="Cotejo ficticio verificado")
+        assert not policy.conciliar_operativamente(sid, data, db, admin)["ya_cotejado"]
+        assert policy.conciliar_operativamente(sid, data, db, admin)["ya_cotejado"]
+        assert db.query(CuotaAmortizacion).one().monto_pagado == Decimal("1250.00")
+    finally:
+        db.close()
+
+
+def test_diagnostico_reservas_no_modifica_ni_reenvia(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    db, admin = crear_pago(monkeypatch)
+    try:
+        monkeypatch.setenv("WOMPI_REFUND_STALE_MINUTES", "0")
+        with pytest.raises(HTTPException):
+            policy.reservas_posiblemente_abandonadas(db, admin)
+        monkeypatch.setenv("WOMPI_REFUND_STALE_MINUTES", "30")
+        result = policy.reservas_posiblemente_abandonadas(db, admin)
+        assert result["operaciones"] == []
+        monkeypatch.setattr(policy, "solicitar_reembolso_sandbox", lambda **_: {"status": "APPROVED", "refund_id": "12345"})
+        solicitud = policy.crear(nueva(wompi_pago_id=db.query(WompiPago).one().id), db, admin)
+        policy.decidir(solicitud["id"], policy.Decision(decision="APROBADA", justificacion="Validación sintética"), db, admin)
+        policy.ejecutar(solicitud["id"], db, admin)
+        s = db.get(SolicitudReembolsoSandbox, solicitud["id"])
+        refund = db.get(WompiReembolsoSandbox, s.reembolso_id)
+        s.ejecucion, refund.estado = "CREANDO", "CREANDO"
+        refund.creado_en = datetime.now(timezone.utc) - timedelta(hours=1)
+        db.commit()
+        diagnostic = policy.reservas_posiblemente_abandonadas(db, admin)
+        assert len(diagnostic["operaciones"]) == 1
+        assert diagnostic["operaciones"][0]["actividad_confirmada"] is None
+        assert s.ejecucion == "CREANDO" and refund.estado == "CREANDO"
+        assert db.query(Pago).count() == 1
+        assert db.query(CuotaAmortizacion).one().monto_pagado == Decimal("1250.00")
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("changed", [{"estado": "DECLINED"}, {"monto_centavos": 10001}, {"transaction_id": "otra"}])
+def test_respuesta_contradictoria_deja_alerta_y_no_modifica_cartera(monkeypatch, changed):
+    db, admin = crear_pago(monkeypatch)
+    monkeypatch.setattr(policy, "solicitar_reembolso_sandbox", lambda **_: {"status": "APPROVED", "refund_id": "12345"})
+    try:
+        request = policy.crear(nueva(wompi_pago_id=db.query(WompiPago).one().id), db, admin)
+        sid = request["id"]
+        policy.decidir(sid, policy.Decision(decision="APROBADA", justificacion="Aprobación de prueba"), db, admin)
+        policy.ejecutar(sid, db, admin)
+        valid = {"respuesta_http_wompi": 200, "datos_confirmados": True, "transaction_id": "route-tx-001", "monto_centavos": 10000, "estado": "APPROVED"}
+        monkeypatch.setattr(policy, "consultar_reembolso_sandbox", lambda _: valid)
+        policy.verificar(sid, policy.ConsultaProveedor(refund_id="12345"), db, admin)
+        monkeypatch.setattr(policy, "consultar_reembolso_sandbox", lambda _: {**valid, **changed})
+        with pytest.raises(HTTPException) as exc:
+            policy.verificar(sid, policy.ConsultaProveedor(refund_id="12345"), db, admin)
+        assert exc.value.status_code == 409
+        assert db.get(SolicitudReembolsoSandbox, sid).ejecucion == "CONFIRMADO"
+        assert db.get(SolicitudReembolsoSandbox, sid).verificacion == "CONFIRMADO"
+        assert db.query(AuditLog).filter_by(entidad_id=sid, accion="ALERTA_VERIFICACION_REEMBOLSO_SANDBOX").count() == 1
+        assert db.query(CuotaAmortizacion).one().monto_pagado == Decimal("1250.00")
+        assert db.query(Pago).count() == 1
+    finally:
+        db.close()
+
+
+def test_respuesta_tardia_no_sobrescribe_estado_incierto(monkeypatch):
+    db, admin = crear_pago(monkeypatch)
+    calls = []
+    try:
+        request = policy.crear(nueva(wompi_pago_id=db.query(WompiPago).one().id), db, admin)
+        sid = request["id"]
+        policy.decidir(sid, policy.Decision(decision="APROBADA", justificacion="Aprobación de prueba"), db, admin)
+        def delayed(**kwargs):
+            calls.append(kwargs)
+            with Session() as other:
+                s = other.get(SolicitudReembolsoSandbox, sid)
+                refund = other.get(WompiReembolsoSandbox, s.reembolso_id)
+                s.ejecucion = refund.estado = "INCIERTO"
+                other.commit()
+            return {"status": "APPROVED", "refund_id": "12345"}
+        monkeypatch.setattr(policy, "solicitar_reembolso_sandbox", delayed)
+        with pytest.raises(HTTPException) as exc:
+            policy.ejecutar(sid, db, admin)
+        assert exc.value.status_code == 409
+        db.expire_all()
+        assert db.get(SolicitudReembolsoSandbox, sid).ejecucion == "INCIERTO"
+        with pytest.raises(HTTPException):
+            policy.ejecutar(sid, db, admin)
+        assert len(calls) == 1 and db.query(CuotaAmortizacion).one().monto_pagado == Decimal("1250.00")
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("fase", ["antes_envio", "durante_envio"])
+def test_interrupcion_conserva_reserva_tras_nueva_sesion(monkeypatch, fase):
+    db, admin = crear_pago(monkeypatch)
+    llamadas = []
+    try:
+        solicitud = policy.crear(nueva(wompi_pago_id=db.query(WompiPago).one().id), db, admin)
+        sid, admin_id = solicitud["id"], admin.id
+        policy.decidir(sid, policy.Decision(decision="APROBADA", justificacion="Validación sintética"), db, admin)
+        def interrupcion(*args, **kwargs):
+            llamadas.append(fase)
+            raise SystemExit("interrupción simulada")
+        if fase == "antes_envio":
+            monkeypatch.setattr(policy, "consultar_transaccion", interrupcion)
+        else:
+            monkeypatch.setattr(policy, "solicitar_reembolso_sandbox", interrupcion)
+        with pytest.raises(SystemExit):
+            policy.ejecutar(sid, db, admin)
+        db.close()
+        with Session() as nueva_sesion:
+            registrada = nueva_sesion.get(SolicitudReembolsoSandbox, sid)
+            assert registrada.ejecucion == "CREANDO" and registrada.reembolso_id
+            assert nueva_sesion.get(WompiReembolsoSandbox, registrada.reembolso_id).estado == "CREANDO"
+            with pytest.raises(HTTPException):
+                policy.ejecutar(sid, nueva_sesion, nueva_sesion.get(Usuario, admin_id))
+            assert len(llamadas) == 1
+            assert nueva_sesion.query(CuotaAmortizacion).one().monto_pagado == Decimal("1250.00")
+    finally:
+        db.close()

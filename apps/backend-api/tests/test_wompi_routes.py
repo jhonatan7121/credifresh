@@ -458,6 +458,18 @@ def test_comparacion_no_inventa_transaccion_y_requiere_admin(client, monkeypatch
     assert client.get("/integraciones/wompi/sandbox/creditos/1/cuotas/1/comparar").status_code == 403
 
 
+def preparar_aprobacion_reembolso(db, admin, monkeypatch, monto):
+    from app.api.v1.endpoints import politica_reembolsos_sandbox as policy
+    monkeypatch.setenv("WOMPI_SANDBOX_REFUND_POLICY_ENABLED", "true")
+    monkeypatch.setattr(policy, "consultar_transaccion", lambda _id: make_event()["data"]["transaction"])
+    attempt = db.query(WompiPago).one()
+    datos = policy.NuevaSolicitud(wompi_pago_id=attempt.id, monto_centavos=monto,
+        motivo="PAGO_EN_EXCESO", descripcion="Motivo sintético de prueba", clasificacion="PASIVO_SALDO_A_FAVOR", evidencia="Soporte sintético")
+    solicitud = policy.crear(datos, db, admin)
+    policy.decidir(solicitud["id"], policy.Decision(decision="APROBADA", justificacion="Validación sintética"), db, admin)
+    return policy
+
+
 def test_reembolso_sandbox_reserva_una_vez_y_no_modifica_cartera(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "sandbox")
     event = make_event()
@@ -468,18 +480,21 @@ def test_reembolso_sandbox_reserva_una_vez_y_no_modifica_cartera(monkeypatch):
     def refund(**kwargs):
         calls.append(kwargs)
         return {"status": "APPROVED", "refund_id": "refund-test-1"}
-    monkeypatch.setattr(wompi_endpoint, "solicitar_reembolso_sandbox", refund)
+    from app.api.v1.endpoints import politica_reembolsos_sandbox as policy
+    monkeypatch.setattr(policy, "solicitar_reembolso_sandbox", refund)
     db = Session()
     try:
         admin = Usuario(email="refund-admin@example.invalid", password_hash="x", rol="ADMIN", activo=True)
         db.add(admin)
         db.commit()
         quota = db.query(CuotaAmortizacion).one()
+        preparar_aprobacion_reembolso(db, admin, monkeypatch, 25000)
         data = wompi_endpoint.ReembolsoSandboxInput(monto_centavos=25000, escenario="approved")
         result = wompi_endpoint.crear_reembolso_de_prueba(quota.credito_id, quota.id, data, db, admin)
-        again = wompi_endpoint.crear_reembolso_de_prueba(quota.credito_id, quota.id, data, db, admin)
-        assert result["estado"] == "CONFIRMADO" and result["saldo_cartera_modificado"] is False
-        assert again["ya_existia"] is True and len(calls) == 1
+        with pytest.raises(HTTPException):
+            wompi_endpoint.crear_reembolso_de_prueba(quota.credito_id, quota.id, data, db, admin)
+        assert result["ejecucion"] == "CONFIRMADO" and result["cartera_modificada"] is False
+        assert len(calls) == 1
         assert db.query(WompiReembolsoSandbox).count() == 1 and db.query(Pago).count() == 1
         assert quota.estado == "PAGADA" and quota.monto_pagado == Decimal("1250.00")
         assert wompi_endpoint.consultar_reembolso_de_prueba(quota.credito_id, quota.id, db, admin)["estado"] == "CONFIRMADO"
@@ -501,16 +516,19 @@ def test_reembolso_incierto_no_se_reenvia(monkeypatch):
     def timeout(**kwargs):
         calls.append(1)
         raise TimeoutError()
-    monkeypatch.setattr(wompi_endpoint, "solicitar_reembolso_sandbox", timeout)
+    from app.api.v1.endpoints import politica_reembolsos_sandbox as policy
+    monkeypatch.setattr(policy, "solicitar_reembolso_sandbox", timeout)
     db = Session()
     try:
         admin = Usuario(email="uncertain@example.invalid", password_hash="x", rol="ADMIN", activo=True)
         db.add(admin)
         db.commit()
         quota = db.query(CuotaAmortizacion).one()
+        preparar_aprobacion_reembolso(db, admin, monkeypatch, 125000)
         data = wompi_endpoint.ReembolsoSandboxInput(monto_centavos=125000, escenario="approved")
-        assert wompi_endpoint.crear_reembolso_de_prueba(quota.credito_id, quota.id, data, db, admin)["estado"] == "INCIERTO"
-        assert wompi_endpoint.crear_reembolso_de_prueba(quota.credito_id, quota.id, data, db, admin)["ya_existia"]
+        assert wompi_endpoint.crear_reembolso_de_prueba(quota.credito_id, quota.id, data, db, admin)["ejecucion"] == "INCIERTO"
+        with pytest.raises(HTTPException):
+            wompi_endpoint.crear_reembolso_de_prueba(quota.credito_id, quota.id, data, db, admin)
         assert len(calls) == 1 and quota.monto_pagado == Decimal("1250.00")
         monkeypatch.setattr(wompi_endpoint, "consultar_reembolso_sandbox", lambda _id: {
             "respuesta_http_wompi": 200, "datos_confirmados": True, "estado": "APPROVED",
@@ -558,20 +576,22 @@ def test_reembolso_rechazado_y_monto_excesivo_no_alteran_cartera(monkeypatch):
     def rejected(**kwargs):
         calls.append(1)
         return {"status": "DECLINED", "refund_id": "refund-declined"}
-    monkeypatch.setattr(wompi_endpoint, "solicitar_reembolso_sandbox", rejected)
+    from app.api.v1.endpoints import politica_reembolsos_sandbox as policy
+    monkeypatch.setattr(policy, "solicitar_reembolso_sandbox", rejected)
     db = Session()
     try:
         admin = Usuario(email="declined@example.invalid", password_hash="x", rol="ADMIN", activo=True)
         db.add(admin)
         db.commit()
         quota = db.query(CuotaAmortizacion).one()
+        preparar_aprobacion_reembolso(db, admin, monkeypatch, 125000)
         with pytest.raises(HTTPException) as exc:
             wompi_endpoint.crear_reembolso_de_prueba(quota.credito_id, quota.id,
                 wompi_endpoint.ReembolsoSandboxInput(monto_centavos=125001, escenario="approved"), db, admin)
         assert exc.value.status_code == 409 and calls == []
         result = wompi_endpoint.crear_reembolso_de_prueba(quota.credito_id, quota.id,
             wompi_endpoint.ReembolsoSandboxInput(monto_centavos=125000, escenario="declined"), db, admin)
-        assert result["estado"] == "NO_APROBADO" and result["estado_wompi"] == "DECLINED"
+        assert result["ejecucion"] == "NO_APROBADO" and result["estado_wompi"] == "DECLINED"
         assert quota.estado == "PAGADA" and quota.monto_pagado == Decimal("1250.00") and len(calls) == 1
     finally:
         db.close()
@@ -583,7 +603,8 @@ def test_caida_al_guardar_respuesta_conserva_reserva_y_no_reenvia(monkeypatch):
     call_webhook(event, event["signature"]["checksum"])
     monkeypatch.setattr(wompi_endpoint, "consultar_transaccion", lambda _id: event["data"]["transaction"])
     calls = []
-    monkeypatch.setattr(wompi_endpoint, "solicitar_reembolso_sandbox", lambda **_kwargs:
+    from app.api.v1.endpoints import politica_reembolsos_sandbox as policy
+    monkeypatch.setattr(policy, "solicitar_reembolso_sandbox", lambda **_kwargs:
         (calls.append(1) or {"status": "APPROVED", "refund_id": "refund-ficticio"}))
     db = Session()
     try:
@@ -592,6 +613,7 @@ def test_caida_al_guardar_respuesta_conserva_reserva_y_no_reenvia(monkeypatch):
         db.commit()
         quota = db.query(CuotaAmortizacion).one()
         credit_id, quota_id, admin_id = quota.credito_id, quota.id, admin.id
+        preparar_aprobacion_reembolso(db, admin, monkeypatch, 10000)
         real_commit = db.commit
         count = []
         def fail_second_commit():
@@ -607,8 +629,9 @@ def test_caida_al_guardar_respuesta_conserva_reserva_y_no_reenvia(monkeypatch):
         with Session() as check:
             stored = check.query(WompiReembolsoSandbox).one()
             assert stored.estado == "CREANDO"
-            result = wompi_endpoint.crear_reembolso_de_prueba(credit_id, quota_id, data, check, check.get(Usuario, admin_id))
-            assert result["ya_existia"] is True and result["estado"] == "CREANDO"
+            with pytest.raises(HTTPException):
+                wompi_endpoint.crear_reembolso_de_prueba(credit_id, quota_id, data, check, check.get(Usuario, admin_id))
+            assert stored.estado == "CREANDO"
             assert check.query(Pago).count() == 1
         assert len(calls) == 1
     finally:

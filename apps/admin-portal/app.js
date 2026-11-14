@@ -1579,6 +1579,49 @@
             actionCell.append(button);
           });
         }
+        const addAction = (label, action) => {
+          const button = document.createElement("button");
+          button.type = "button"; button.className = "button button-secondary"; button.textContent = label;
+          button.addEventListener("click", action); actionCell.append(button);
+        };
+        if (r.autorizacion === "APROBADA" && r.ejecucion === "NO_ENVIADO") {
+          addAction("Ejecutar prueba", async () => {
+            if (!window.confirm("¿Enviar una única solicitud de reembolso en Sandbox?")) return;
+            try { await api(`${refundApi}/${r.id}/ejecutar`, {method: "POST"}); await loadRefunds(); }
+            catch (error) { setMessage($("refund-message"), error.message || "Resultado no confirmado; no reintentes automáticamente."); }
+          });
+        }
+        if (r.reembolso_id && r.verificacion !== "CONFIRMADO") {
+          addAction("Verificar proveedor", async () => {
+            const id = window.prompt("ID numérico del reembolso de prueba:"); if (id === null) return;
+            try { await api(`${refundApi}/${r.id}/verificar`, {method: "POST", body: JSON.stringify({refund_id:id.trim()})}); await loadRefunds(); }
+            catch (error) { setMessage($("refund-message"), error.message || "Resultado no confirmado."); }
+          });
+        }
+        if (r.ejecucion === "CREANDO") {
+          addAction("Revisar reserva antigua", async () => {
+            if (!window.confirm("¿Revisar la reserva? Si es antigua e inactiva quedará incierta y no se reenviará.")) return;
+            try { await api(`${refundApi}/${r.id}/recuperar`, {method:"POST"}); await loadRefunds(); }
+            catch (error) { setMessage($("refund-message"), error.message || "No se pudo revisar la reserva."); }
+          });
+        }
+        if (r.verificacion === "CONFIRMADO" && r.conciliacion !== "COTEJADO_SANDBOX") {
+          addAction("Cotejar prueba", async () => {
+            const obs = window.prompt("Describe el soporte del cotejo de prueba:"); if (obs === null) return;
+            try { await api(`${refundApi}/${r.id}/conciliacion-operativa`, {method:"POST", body:JSON.stringify({resultado:"APROBADA", observacion:obs})}); await loadRefunds(); }
+            catch (error) { setMessage($("refund-message"), error.message || "No se pudo cotejar."); }
+          });
+        }
+        addAction("Revisar detalle", async () => {
+          try { $("refund-detail").textContent = JSON.stringify(await api(`${refundApi}/${r.id}`), null, 2); }
+          catch (error) { setMessage($("refund-message"), error.message || "No se pudo consultar."); }
+        });
+        addAction("Revisión contable", async () => {
+          const resultado = window.prompt("Escribe APROBADA, RECHAZADA o PENDIENTE:"); if (resultado === null) return;
+          const observacion = window.prompt("Documenta la revisión (mínimo 10 caracteres):"); if (observacion === null) return;
+          try { await api(`${refundApi}/${r.id}/revision-contable`, {method:"POST", body:JSON.stringify({resultado:resultado.trim().toUpperCase(), observacion})}); await loadRefunds(); }
+          catch (error) { setMessage($("refund-message"), error.message || "No se pudo registrar la revisión."); }
+        });
         tr.append(actionCell); return tr;
       });
       $("refund-list").replaceChildren(table(["ID", "Crédito", "Pago", "Centavos", "Motivo", "Clasificación", "Autorización", "Envío", "Acciones"], rows, "No hay solicitudes de prueba."));

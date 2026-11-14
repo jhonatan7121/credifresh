@@ -247,7 +247,7 @@
           <section class="content-card">
             <p><strong>AMBIENTE SANDBOX — NO UTILIZA DINERO REAL</strong></p>
             <p><strong>LOS REEMBOLSOS NO MODIFICAN AUTOMÁTICAMENTE LA CARTERA</strong></p>
-            <p>La ejecución y la conciliación están bloqueadas hasta resolver la incompatibilidad del endpoint anterior. Este panel no acredita conciliación bancaria.</p>
+            <p>La conciliación operativa es una prueba y no acredita conciliación bancaria real. Ante un resultado incierto, investiga antes de continuar.</p>
             <form id="refund-request-form">
               <label>ID de pago Wompi <input id="refund-payment-id" type="number" min="1" required></label>
               <label>Importe en centavos COP <input id="refund-amount" type="number" min="1" step="1" required></label>
@@ -258,7 +258,7 @@
               <button class="button button-primary" type="submit">Registrar solicitud para revisión</button>
             </form><p id="refund-message" class="message" role="status"></p>
           </section>
-          <section class="content-card"><div class="card-heading"><h3>Solicitudes de prueba</h3><button id="refund-refresh" class="button button-secondary" type="button">Actualizar</button></div><div id="refund-list"></div></section>
+          <section class="content-card"><div class="card-heading"><h3>Solicitudes de prueba</h3><button id="refund-refresh" class="button button-secondary" type="button">Actualizar</button></div><div id="refund-list"></div><pre id="refund-detail"></pre></section>
         </section>
         <section id="section-auditoria" class="page-section" hidden aria-labelledby="audit-title">
           <div class="section-heading"><div><p class="eyebrow">TRAZABILIDAD</p><h2 id="audit-title">Auditoría administrativa</h2></div><button id="audit-refresh-button" class="button button-secondary" type="button">Actualizar eventos</button></div>

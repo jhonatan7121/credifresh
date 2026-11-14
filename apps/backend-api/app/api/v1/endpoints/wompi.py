@@ -132,50 +132,19 @@ def crear_reembolso_de_prueba(
     credito_id: int, cuota_id: int, datos: ReembolsoSandboxInput,
     db: Session = Depends(get_db), current_user: Usuario = Depends(RoleChecker(["ADMIN"]))
 ):
-    """Submit at most one simulated refund per Wompi payment; never alter the debt."""
-    _exigir_sandbox_recaudo()
-    attempt = (db.query(WompiPago).filter_by(credito_id=credito_id, cuota_id=cuota_id, estado="PAGADO")
-               .order_by(WompiPago.id.desc()).with_for_update().first())
-    if not attempt or not attempt.wompi_transaction_id or not attempt.wompi_link_id:
-        raise HTTPException(status_code=409, detail="No hay un pago Wompi confirmado para esta cuota.")
-    previous = db.query(WompiReembolsoSandbox).filter_by(wompi_pago_id=attempt.id).first()
-    if previous:
-        if int((Decimal(str(previous.monto)) * 100).quantize(Decimal("1"))) != datos.monto_centavos or previous.escenario != datos.escenario:
-            raise HTTPException(status_code=409, detail="Ya existe una solicitud diferente para este pago; requiere revisión.")
-        return {**_resumen_reembolso(previous), "ya_existia": True}
-    local_payments = db.query(Pago).filter_by(credito_id=credito_id, cuota_id=cuota_id, metodo_pago="WOMPI_SANDBOX").all()
-    expected = int((Decimal(str(attempt.monto_esperado)) * 100).quantize(Decimal("1")))
-    if (len(local_payments) != 1 or Decimal(str(local_payments[0].monto_pagado)) != Decimal(str(attempt.monto_esperado))
-            or datos.monto_centavos > expected):
-        raise HTTPException(status_code=409, detail="Monto o registros de pago no coinciden; requiere revisión.")
-    transaction = consultar_transaccion(attempt.wompi_transaction_id)
-    if (transaction.get("status") != "APPROVED" or transaction.get("payment_link_id") != attempt.wompi_link_id
-            or transaction.get("currency") != "COP" or type(transaction.get("amount_in_cents")) is not int
-            or transaction.get("amount_in_cents") != expected):
-        raise HTTPException(status_code=409, detail="Wompi no confirmó el pago original; requiere revisión.")
-    row = WompiReembolsoSandbox(wompi_pago_id=attempt.id, referencia=secrets.token_hex(16),
-        monto=Decimal(datos.monto_centavos) / 100, escenario=datos.escenario, estado="CREANDO")
-    db.add(row)
-    registrar_auditoria(db=db, usuario=current_user, accion="INICIAR_REEMBOLSO_WOMPI_SANDBOX",
-        entidad="credito", entidad_id=credito_id, detalles={"cuota_id": cuota_id, "referencia": row.referencia})
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="Ya existe una solicitud para este pago; no se enviará otra.") from exc
-    try:
-        result = solicitar_reembolso_sandbox(transaction_id=attempt.wompi_transaction_id,
-            amount_in_cents=datos.monto_centavos, reference=row.referencia, scenario=datos.escenario)
-        row.estado_proveedor, row.wompi_reembolso_id = result["status"], result["refund_id"]
-        row.estado = "CONFIRMADO" if result["status"] == "APPROVED" else "NO_APROBADO"
-    except Exception:
-        # A timeout or malformed response cannot prove that Wompi did not execute it.
-        row.estado = "INCIERTO"
-    registrar_auditoria(db=db, usuario=current_user, accion="RESULTADO_REEMBOLSO_WOMPI_SANDBOX",
-        entidad="credito", entidad_id=credito_id, resultado="REQUIERE_REVISION",
-        detalles={"cuota_id": cuota_id, "referencia": row.referencia, "estado": row.estado})
-    db.commit()
-    return {**_resumen_reembolso(row), "ya_existia": False}
+    """Ruta compatible: delega en el mismo control obligatorio de aprobación."""
+    from app.api.v1.endpoints.politica_reembolsos_sandbox import exigir_habilitado, ejecutar_autorizado
+    from app.models.solicitud_reembolso import SolicitudReembolsoSandbox
+    exigir_habilitado()
+    solicitud = (db.query(SolicitudReembolsoSandbox)
+                 .filter_by(credito_id=credito_id, cuota_id=cuota_id,
+                            monto_centavos=datos.monto_centavos, autorizacion="APROBADA")
+                 .order_by(SolicitudReembolsoSandbox.id.desc()).first())
+    if not solicitud:
+        raise HTTPException(status_code=409, detail="Se requiere una solicitud aprobada para este pago e importe.")
+    solicitud_id = solicitud.id
+    db.rollback()
+    return ejecutar_autorizado(solicitud_id, datos.escenario, db, current_user)
 
 
 @router.get("/sandbox/revision-enlaces")
