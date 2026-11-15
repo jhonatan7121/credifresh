@@ -1,12 +1,15 @@
 """Cotejo de informes sintéticos. No importa extractos reales ni mueve cartera."""
 
 import hashlib
+import json
 from datetime import date
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.endpoints.wompi import _exigir_sandbox_recaudo
 from app.config.database import get_db
@@ -16,6 +19,7 @@ from app.models.pago import Pago
 from app.models.usuario import Usuario
 from app.models.wompi_pago import WompiPago
 from app.models.wompi_reembolso import WompiReembolsoSandbox
+from app.models.expediente_conciliacion import ExpedienteConciliacionSandbox, DiferenciaConciliacionSandbox
 from app.services.wompi_service import consultar_transaccion
 from modules.audit.audit_service import registrar_auditoria
 
@@ -53,11 +57,7 @@ class InformeSandbox(BaseModel):
         return self
 
 
-@router.post("/conciliacion-informe")
-def comparar_informe_sandbox(
-    informe: InformeSandbox, db: Session = Depends(get_db),
-    current_user: Usuario = Depends(RoleChecker(["ADMIN"]))
-):
+def _comparar_informe(informe, db, current_user, *, commit):
     """Cotejar cifras ingresadas, sin afirmar autenticidad o completitud del extracto."""
     _exigir_sandbox_recaudo()
     warnings = []
@@ -107,5 +107,103 @@ def comparar_informe_sandbox(
         entidad="conciliacion", entidad_id=None, resultado="REQUIERE_REVISION",
         detalles={"huella_informe_sha256": digest, "total_centavos": total,
                   "neto_calculado_centavos": expected, "diferencias": len(warnings)})
-    db.commit()
+    if commit:
+        db.commit()
     return result
+
+
+@router.post("/conciliacion-informe")
+def comparar_informe_sandbox(informe: InformeSandbox, db: Session = Depends(get_db),
+        current_user: Usuario = Depends(RoleChecker(["ADMIN"]))):
+    return _comparar_informe(informe, db, current_user, commit=True)
+
+
+class RevisionDiferencia(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    observacion: str = Field(min_length=10, max_length=2000)
+
+
+class NuevaEvaluacion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    clave: str = Field(pattern=r"^[a-f0-9]{32}$")
+
+
+def _expediente_resultado(db, expediente):
+    diferencias = db.query(DiferenciaConciliacionSandbox).filter_by(expediente_id=expediente.id).order_by(DiferenciaConciliacionSandbox.indice).all()
+    return {"id": expediente.id, "origen_id": expediente.origen_id, "huella": expediente.huella, "estado": expediente.estado,
+        "creador_id": expediente.creador_id, "creada_en": expediente.creada_en,
+        "ambiente": "sandbox", "conciliacion_bancaria_real": False,
+        "informe": json.loads(expediente.informe_json), "resultado": json.loads(expediente.resultado_json),
+        "diferencias": [{"id": d.id, "motivo": d.motivo, "transaction_id": d.transaccion_id,
+            "estado": d.estado, "observacion": d.observacion, "revisor_id": d.revisor_id,
+            "revisada_en": d.revisada_en} for d in diferencias]}
+
+
+@router.post("/expedientes-conciliacion")
+def crear_expediente(informe: InformeSandbox, db: Session = Depends(get_db), current_user: Usuario = Depends(RoleChecker(["ADMIN"]))):
+    _exigir_sandbox_recaudo()
+    digest = hashlib.sha256(informe.model_dump_json().encode("utf-8")).hexdigest()
+    return _guardar_expediente(informe, db, current_user, digest, None)
+
+
+def _guardar_expediente(informe, db, current_user, digest, origen_id):
+    anterior = db.query(ExpedienteConciliacionSandbox).filter_by(huella=digest).first()
+    if anterior:
+        return {**_expediente_resultado(db, anterior), "ya_existia": True}
+    resultado = _comparar_informe(informe, db, current_user, commit=False)
+    expediente = ExpedienteConciliacionSandbox(huella=digest, informe_json=informe.model_dump_json(),
+        resultado_json=json.dumps(resultado, ensure_ascii=False), creador_id=current_user.id, estado="REQUIERE_REVISION", origen_id=origen_id)
+    db.add(expediente)
+    try:
+        db.flush()
+        for indice, diferencia in enumerate(resultado["diferencias"]):
+            db.add(DiferenciaConciliacionSandbox(expediente_id=expediente.id, indice=indice,
+                motivo=diferencia["motivo"], transaccion_id=diferencia.get("transaction_id"), estado="ABIERTA"))
+        registrar_auditoria(db=db, usuario=current_user, accion="CREAR_EXPEDIENTE_CONCILIACION_SANDBOX",
+            entidad="conciliacion", entidad_id=expediente.id, resultado="REQUIERE_REVISION", detalles={"huella": digest})
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        anterior = db.query(ExpedienteConciliacionSandbox).filter_by(huella=digest).first()
+        if not anterior:
+            raise
+        return {**_expediente_resultado(db, anterior), "ya_existia": True}
+    return {**_expediente_resultado(db, expediente), "ya_existia": False}
+
+
+@router.post("/expedientes-conciliacion/{expediente_id}/reevaluar")
+def reevaluar_expediente(expediente_id: int, datos: NuevaEvaluacion, db: Session = Depends(get_db),
+        current_user: Usuario = Depends(RoleChecker(["ADMIN"]))):
+    _exigir_sandbox_recaudo()
+    origen = db.get(ExpedienteConciliacionSandbox, expediente_id)
+    if not origen:
+        raise HTTPException(status_code=404, detail="Expediente no encontrado")
+    informe = InformeSandbox.model_validate_json(origen.informe_json)
+    digest = hashlib.sha256(f"reevaluacion:{expediente_id}:{datos.clave}".encode()).hexdigest()
+    return _guardar_expediente(informe, db, current_user, digest, expediente_id)
+
+
+@router.get("/expedientes-conciliacion")
+def listar_expedientes(db: Session = Depends(get_db), current_user: Usuario = Depends(RoleChecker(["ADMIN"]))):
+    _exigir_sandbox_recaudo()
+    return [_expediente_resultado(db, item) for item in db.query(ExpedienteConciliacionSandbox).order_by(ExpedienteConciliacionSandbox.id.desc()).limit(100)]
+
+
+@router.post("/expedientes-conciliacion/{expediente_id}/diferencias/{diferencia_id}/revision")
+def revisar_diferencia(expediente_id: int, diferencia_id: int, datos: RevisionDiferencia,
+        db: Session = Depends(get_db), current_user: Usuario = Depends(RoleChecker(["ADMIN"]))):
+    _exigir_sandbox_recaudo()
+    diferencia = db.query(DiferenciaConciliacionSandbox).filter_by(id=diferencia_id, expediente_id=expediente_id).with_for_update().first()
+    if not diferencia:
+        raise HTTPException(status_code=404, detail="Diferencia no encontrada")
+    if diferencia.estado != "ABIERTA":
+        raise HTTPException(status_code=409, detail="La diferencia ya fue revisada")
+    diferencia.estado = "REVISADA"
+    diferencia.observacion = datos.observacion
+    diferencia.revisor_id = current_user.id
+    diferencia.revisada_en = datetime.now(timezone.utc)
+    registrar_auditoria(db=db, usuario=current_user, accion="REVISAR_DIFERENCIA_CONCILIACION_SANDBOX",
+        entidad="conciliacion", entidad_id=expediente_id, resultado="REQUIERE_REVISION",
+        detalles={"diferencia_id": diferencia_id, "observacion": datos.observacion})
+    db.commit()
+    return _expediente_resultado(db, db.get(ExpedienteConciliacionSandbox, expediente_id))

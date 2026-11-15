@@ -20,6 +20,7 @@ from app.models.usuario import Usuario
 from app.models.wompi_desembolso import WompiDesembolsoSandbox  # noqa: F401
 from app.models.wompi_reembolso import WompiReembolsoSandbox  # noqa: F401
 from app.models.solicitud_reembolso import SolicitudReembolsoSandbox  # noqa: F401
+from app.models.expediente_conciliacion import ExpedienteConciliacionSandbox, DiferenciaConciliacionSandbox  # noqa: F401
 from app.core.rate_limit import auth_rate_limit_windows  # noqa: F401
 
 # this is the Alembic Config object, which provides
@@ -29,7 +30,7 @@ config = context.config
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # add your model's MetaData object here
 # for 'autogenerate' support

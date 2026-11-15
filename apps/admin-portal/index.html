@@ -259,6 +259,10 @@
             </form><p id="refund-message" class="message" role="status"></p>
           </section>
           <section class="content-card"><div class="card-heading"><h3>Solicitudes de prueba</h3><button id="refund-refresh" class="button button-secondary" type="button">Actualizar</button></div><div id="refund-list"></div><pre id="refund-detail"></pre></section>
+          <section class="content-card"><h3>Expedientes de conciliación Sandbox</h3><p>Solo datos ficticios. Este cotejo no acredita una conciliación bancaria real.</p>
+            <form id="conciliation-form"><label for="conciliation-data">Informe sintético en formato JSON</label><textarea id="conciliation-data" required rows="8"></textarea><button class="button button-primary" type="submit">Cotejar y registrar</button></form>
+            <button id="conciliation-refresh" class="button button-secondary" type="button">Actualizar expedientes</button><p id="conciliation-message" role="status"></p><div id="conciliation-list"></div>
+          </section>
         </section>
         <section id="section-auditoria" class="page-section" hidden aria-labelledby="audit-title">
           <div class="section-heading"><div><p class="eyebrow">TRAZABILIDAD</p><h2 id="audit-title">Auditoría administrativa</h2></div><button id="audit-refresh-button" class="button button-secondary" type="button">Actualizar eventos</button></div>

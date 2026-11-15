@@ -39,6 +39,42 @@ def isolated_engine():
 
 
 @pytest.mark.skipif(not os.getenv("POSTGRES_TEST_DATABASE_URL"), reason="Requiere PostgreSQL local aislado")
+def test_expediente_simultaneo_unico_y_revision(monkeypatch):
+    from app.api.v1.endpoints import conciliacion_sandbox as conciliacion
+    from app.models.expediente_conciliacion import ExpedienteConciliacionSandbox, DiferenciaConciliacionSandbox
+    monkeypatch.setenv("ENVIRONMENT", "sandbox")
+    engine = isolated_engine()
+    Session = sessionmaker(bind=engine, autoflush=False)
+    unique = uuid4().hex
+    with Session() as db:
+        admin = Usuario(email=f"conc-{unique}@example.invalid", password_hash="x", rol="ADMIN", activo=True)
+        db.add(admin); db.commit(); admin_id = admin.id
+    barrier = threading.Barrier(2)
+    def fake_comparison(*args, **kwargs):
+        barrier.wait(timeout=10)
+        return {"diferencias": [{"motivo":"NO_REGISTRADA_EN_CARTERA", "transaction_id":unique}]}
+    monkeypatch.setattr(conciliacion, "_comparar_informe", fake_comparison)
+    report = conciliacion.InformeSandbox(periodo_desde="2026-11-01", periodo_hasta="2026-11-02",
+        referencia_abono_wompi=unique, referencia_abono_banco=unique,
+        transacciones=[{"transaction_id":unique, "monto_centavos":100}], comisiones_centavos=0,
+        impuestos_centavos=0, reembolsos_centavos=0, otros_descuentos_centavos=0,
+        neto_informe_centavos=100, abono_banco_centavos=100)
+    def worker():
+        with Session() as db:
+            return conciliacion.crear_expediente(report, db, db.get(Usuario, admin_id))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(worker), pool.submit(worker)]
+        result = [f.result(timeout=20) for f in futures]
+    assert sorted(r["ya_existia"] for r in result) == [False, True]
+    assert result[0]["id"] == result[1]["id"]
+    with Session() as db:
+        assert db.query(ExpedienteConciliacionSandbox).filter_by(id=result[0]["id"]).count() == 1
+        assert db.query(DiferenciaConciliacionSandbox).filter_by(expediente_id=result[0]["id"]).count() == 1
+        assert db.query(AuditLog).filter_by(accion="CREAR_EXPEDIENTE_CONCILIACION_SANDBOX", entidad_id=result[0]["id"]).count() == 1
+    engine.dispose()
+
+
+@pytest.mark.skipif(not os.getenv("POSTGRES_TEST_DATABASE_URL"), reason="Requiere PostgreSQL local aislado")
 def test_solicitudes_simultaneas_no_crean_dos_links(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "test")
     monkeypatch.setenv("WOMPI_ENVIRONMENT", "sandbox")

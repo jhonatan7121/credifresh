@@ -700,6 +700,44 @@ def test_cotejo_informe_sandbox_no_declara_banco_verificado(monkeypatch):
         db.close()
 
 
+def test_expediente_idempotente_revision_auditada_sin_cartera(monkeypatch):
+    from app.models.expediente_conciliacion import ExpedienteConciliacionSandbox, DiferenciaConciliacionSandbox
+    monkeypatch.setenv("ENVIRONMENT", "sandbox")
+    payload = {"periodo_desde":"2026-11-01", "periodo_hasta":"2026-11-10", "referencia_abono_wompi":"A",
+        "transacciones":[{"transaction_id":"tx-test", "monto_centavos":100}], "comisiones_centavos":0,
+        "impuestos_centavos":0, "reembolsos_centavos":0, "otros_descuentos_centavos":0,
+        "neto_informe_centavos":100, "referencia_abono_banco":"A", "abono_banco_centavos":100}
+    calls = []
+    def fake_cotejo(*args, **kwargs):
+        calls.append(1)
+        motivo = "NO_REGISTRADA_EN_CARTERA" if len(calls) == 1 else "DIFERENCIA_TRANSACCION_O_CARTERA"
+        return {"diferencias":[{"motivo":motivo, "transaction_id":"tx-test"}]}
+    monkeypatch.setattr(cotejo, "_comparar_informe", fake_cotejo)
+    db = Session()
+    try:
+        admin = Usuario(email="expediente@example.invalid", password_hash="x", rol="ADMIN", activo=True)
+        db.add(admin); db.commit()
+        before = [(q.id, q.estado, q.monto_pagado) for q in db.query(CuotaAmortizacion).order_by(CuotaAmortizacion.id)]
+        first = cotejo.crear_expediente(cotejo.InformeSandbox(**payload), db, admin)
+        second = cotejo.crear_expediente(cotejo.InformeSandbox(**payload), db, admin)
+        assert first["ya_existia"] is False and second["ya_existia"] is True
+        assert len(calls) == 1 and db.query(ExpedienteConciliacionSandbox).count() == 1
+        assert db.query(DiferenciaConciliacionSandbox).count() == 1
+        reevaluated = cotejo.reevaluar_expediente(first["id"], cotejo.NuevaEvaluacion(clave="a" * 32), db, admin)
+        repeated = cotejo.reevaluar_expediente(first["id"], cotejo.NuevaEvaluacion(clave="a" * 32), db, admin)
+        assert reevaluated["origen_id"] == first["id"] and reevaluated["id"] != first["id"]
+        assert first["diferencias"][0]["motivo"] == "NO_REGISTRADA_EN_CARTERA"
+        assert reevaluated["diferencias"][0]["motivo"] == "DIFERENCIA_TRANSACCION_O_CARTERA"
+        assert repeated["ya_existia"] is True and len(calls) == 2
+        revised = cotejo.revisar_diferencia(first["id"], first["diferencias"][0]["id"], cotejo.RevisionDiferencia(observacion="Revisado con datos ficticios"), db, admin)
+        assert revised["diferencias"][0]["estado"] == "REVISADA" and revised["conciliacion_bancaria_real"] is False
+        with pytest.raises(HTTPException):
+            cotejo.revisar_diferencia(first["id"], first["diferencias"][0]["id"], cotejo.RevisionDiferencia(observacion="Repeticion de prueba"), db, admin)
+        assert before == [(q.id, q.estado, q.monto_pagado) for q in db.query(CuotaAmortizacion).order_by(CuotaAmortizacion.id)]
+    finally:
+        db.close()
+
+
 def test_cotejo_informe_restringido_a_admin_y_sandbox(client, monkeypatch):
     from app.core.deps import get_current_active_user
     from main import app
@@ -711,6 +749,8 @@ def test_cotejo_informe_restringido_a_admin_y_sandbox(client, monkeypatch):
         "impuestos_centavos":0, "reembolsos_centavos":0, "otros_descuentos_centavos":0,
         "neto_informe_centavos":100, "referencia_abono_banco":"A", "abono_banco_centavos":100}
     assert client.post("/integraciones/wompi/sandbox/conciliacion-informe", json=body).status_code == 403
+    assert client.post("/integraciones/wompi/sandbox/expedientes-conciliacion", json=body).status_code == 403
+    assert client.get("/integraciones/wompi/sandbox/expedientes-conciliacion").status_code == 403
     monkeypatch.setenv("ENVIRONMENT", "production")
     with pytest.raises(HTTPException) as exc:
         cotejo.comparar_informe_sandbox(cotejo.InformeSandbox(**body), None, None)

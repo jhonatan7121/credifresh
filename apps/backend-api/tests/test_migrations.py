@@ -32,6 +32,8 @@ EXPECTED_TABLES = {
     "wompi_reembolsos_sandbox",
     "solicitudes_reembolso_sandbox",
     "wompi_desembolsos_sandbox",
+    "expedientes_conciliacion_sandbox",
+    "diferencias_conciliacion_sandbox",
 }
 
 
@@ -42,7 +44,7 @@ class InitialMigrationTests(unittest.TestCase):
             environment = os.environ.copy()
             environment["DATABASE_URL"] = f"sqlite:///{path.as_posix()}"
             command = [sys.executable, "-m", "alembic", "-c", "alembic.ini"]
-            subprocess.run(command + ["upgrade", "head"], cwd=BACKEND_DIRECTORY, env=environment, check=True)
+            subprocess.run(command + ["upgrade", "f16c47d390a1"], cwd=BACKEND_DIRECTORY, env=environment, check=True)
             with closing(sqlite3.connect(path)) as connection:
                 connection.execute("""INSERT INTO solicitudes_reembolso_sandbox
                     (wompi_pago_id, pago_id, credito_id, cuota_id, transaccion_id, monto_centavos,

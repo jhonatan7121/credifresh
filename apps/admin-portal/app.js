@@ -1631,6 +1631,46 @@
     }
   }
   $("refund-refresh").addEventListener("click", loadRefunds);
+  const reconciliationApi = "/integraciones/wompi/sandbox/expedientes-conciliacion";
+  async function loadReconciliation() {
+    try {
+      const entries = await api(reconciliationApi);
+      const container = $("conciliation-list"); container.replaceChildren();
+      entries.forEach((entry) => {
+        const section = document.createElement("section");
+        const title = document.createElement("h4"); title.textContent = `Expediente ${entry.id} · ${entry.estado}`; section.append(title);
+        const refresh = document.createElement("button"); refresh.type = "button"; refresh.textContent = "Nueva evaluación";
+        refresh.addEventListener("click", async () => { refresh.disabled = true;
+          try { await api(`${reconciliationApi}/${entry.id}/reevaluar`, {method:"POST", body:JSON.stringify({clave:crypto.randomUUID().replaceAll("-", "")})}); await loadReconciliation(); }
+          catch (error) { setMessage($("conciliation-message"), error.message || "Resultado incierto; actualiza la lista antes de volver a evaluar."); }
+          finally { refresh.disabled = false; }
+        }); section.append(refresh);
+        const detail = document.createElement("pre"); detail.textContent = JSON.stringify({informe:entry.informe, resultado:entry.resultado}, null, 2); section.append(detail);
+        entry.diferencias.forEach((difference) => {
+          const item = document.createElement("div");
+          const label = document.createElement("p"); label.textContent = `${difference.motivo} · ${difference.transaction_id || "sin transacción"} · ${difference.estado} · ${difference.observacion || ""}`; item.append(label);
+          if (difference.estado === "ABIERTA") {
+            const input = document.createElement("input"); input.placeholder = "Observación de revisión (mínimo 10 caracteres)"; input.maxLength = 2000;
+            const button = document.createElement("button"); button.type = "button"; button.textContent = "Registrar revisión";
+            button.addEventListener("click", async () => { button.disabled = true; try {
+              await api(`${reconciliationApi}/${entry.id}/diferencias/${difference.id}/revision`, {method:"POST", body:JSON.stringify({observacion:input.value.trim()})}); await loadReconciliation();
+            } catch (error) { setMessage($("conciliation-message"), error.message || "No se pudo registrar la revisión."); } finally { button.disabled = false; } });
+            item.append(input, button);
+          }
+          section.append(item);
+        });
+        container.append(section);
+      });
+      if (!entries.length) container.textContent = "No hay expedientes de prueba.";
+    } catch (error) { setMessage($("conciliation-message"), error.message || "No se pudieron cargar los expedientes."); }
+  }
+  $("conciliation-refresh").addEventListener("click", loadReconciliation);
+  $("conciliation-form").addEventListener("submit", async (event) => {
+    event.preventDefault(); const button = event.currentTarget.querySelector("button[type=submit]"); button.disabled = true;
+    try { const data = JSON.parse($("conciliation-data").value); const result = await api(reconciliationApi, {method:"POST", body:JSON.stringify(data)});
+      await loadReconciliation(); setMessage($("conciliation-message"), result.ya_existia ? "El expediente ya estaba registrado." : "Expediente registrado para revisión.", "success");
+    } catch (error) { setMessage($("conciliation-message"), error.message || "No se pudo cotejar el informe."); } finally { button.disabled = false; }
+  });
   $("refund-request-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
